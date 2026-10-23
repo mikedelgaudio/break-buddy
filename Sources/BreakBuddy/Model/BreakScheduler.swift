@@ -8,6 +8,10 @@ struct BreakScheduler {
         for kind in BreakKind.allCases { worked[kind, default: 0] += seconds }
     }
 
+    mutating func restore(_ saved: [BreakKind: TimeInterval]) {
+        worked = saved
+    }
+
     mutating func reset(_ kinds: Set<BreakKind>) {
         for kind in kinds { worked[kind] = 0 }
     }

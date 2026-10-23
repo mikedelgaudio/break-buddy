@@ -57,7 +57,7 @@ final class TestControl: ReminderSink {
             let args = note.userInfo?["args"] as? [String] ?? []
             MainActor.assumeIsolated { self?.receive(id: id, cmd: cmd, args: args) }
         }
-        record("launched", [:])
+        record("ready", [:])
         writeState(cmdId: "launch", error: nil)
     }
 
@@ -124,6 +124,12 @@ final class TestControl: ReminderSink {
             }
         case "resume":
             model.resume()
+        case "lock": model.awayBegan(.locked)
+        case "unlock": model.awayEnded(.locked)
+        case "sleep": model.awayBegan(.asleep)
+        case "wake": model.awayEnded(.asleep)
+        case "displays-sleep": model.awayBegan(.displaysAsleep)
+        case "displays-wake": model.awayEnded(.displaysAsleep)
         case "take":
             model.startBreak(try kinds(arg(0)))
         case "end-break":
@@ -146,7 +152,8 @@ final class TestControl: ReminderSink {
 
     // MARK: Output
 
-    private var elapsed: Double { clock.now.timeIntervalSince(config.start) }
+    /// Seconds since the fixed default start, so `t` stays comparable across relaunches.
+    private var elapsed: Double { clock.now.timeIntervalSince(TestConfig.parseLocal(TestConfig.defaultStart)!) }
 
     private func record(_ event: String, _ data: [String: Any]) {
         var line = data
@@ -167,6 +174,7 @@ final class TestControl: ReminderSink {
             "worked": Dictionary(uniqueKeysWithValues: BreakKind.allCases.map { ($0.rawValue, m.scheduler.workedSeconds($0)) }),
             "due": m.due.sorted().map(\.rawValue),
             "suppression": m.suppressionReasons.map(\.label),
+            "away": m.awayReasons.sorted().map(\.label),
             "paused": m.pausedUntil != nil,
             "presentationMode": m.presentationMode,
             "graceActive": m.coordinator.graceEndsAt != nil,

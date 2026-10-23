@@ -64,6 +64,15 @@ struct ReminderCoordinator {
         }
     }
 
+    /// Holds already-due breaks briefly, e.g. right after a relaunch.
+    mutating func beginGrace(now: Date, settings: BreakSettings) {
+        graceEndsAt = now.addingTimeInterval(settings.graceSeconds)
+    }
+
+    mutating func restoreSnooze(until date: Date) {
+        snoozedUntil = date
+    }
+
     mutating func snooze(now: Date, settings: BreakSettings) {
         snoozedUntil = now.addingTimeInterval(settings.snoozeMinutes * 60)
     }

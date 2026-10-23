@@ -38,9 +38,11 @@ class App:
         self.proc = None
         self.transcript = self.dir / "transcript.jsonl"
 
-    def launch(self):
+    def launch(self, start=None):
+        """Starts the app; `start` (yyyy-MM-ddTHH:mm:ss) sets the clock, e.g. to simulate downtime."""
         (self.dir / "state.json").unlink(missing_ok=True)
-        self.proc = subprocess.Popen([str(BIN)], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env = {**self.env, **({"BB_TEST_START": start} if start else {})}
+        self.proc = subprocess.Popen([str(BIN)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + 15
         while time.time() < deadline:
             try:
@@ -68,6 +70,12 @@ class App:
 
     def reminders(self) -> list:
         return self.events("reminder")
+
+    def kill(self):
+        """Hard kill (SIGKILL): no chance to save on the way out."""
+        self.proc.kill()
+        self.proc.wait(timeout=5)
+        self.proc = None
 
     def quit(self):
         if self.proc and self.proc.poll() is None:
@@ -302,6 +310,174 @@ def presentation_mode_expires(app, check):
     check.eq(app.ctl("advance", 59)["remindersDelivered"], 0, "grace after expiry")
     app.ctl("advance", 1)
     check.eq([(r["kinds"], r["catchUp"]) for r in app.reminders()], [(["eye", "move"], True)], "catch-up after expiry")
+
+
+# --- Milestone 2: away time (lock/sleep) and restarts ------------------------
+
+
+@scenario
+def lock_stops_work_and_credits_eye(app, check):
+    """Locking stops work time; a 30s lock covers the 20s eye break but not the 2m movement break."""
+    app.ctl("advance", 600)
+    s = app.ctl("lock")
+    check.eq(s["status"], "Away · Screen locked", "status while locked")
+    s = app.ctl("advance", 30)
+    check.eq(s["worked"]["eye"], 600, "no work time while locked")
+    s = app.ctl("unlock")
+    returned = app.events("returned")
+    check.eq([(r["seconds"], r["credited"]) for r in returned], [(30, ["eye"])], "returned event")
+    check.eq(s["worked"], {"eye": 0, "move": 600}, "eye credited, movement kept")
+
+
+@scenario
+def brief_lock_credits_nothing(app, check):
+    """A lock shorter than any break duration credits nothing and loses no progress."""
+    app.ctl("advance", 600)
+    app.ctl("lock")
+    app.ctl("advance", 10)
+    s = app.ctl("unlock")
+    check.eq(app.events("returned")[0]["credited"], [], "credited kinds")
+    check.eq(s["worked"], {"eye": 600, "move": 600}, "work time kept")
+
+
+@scenario
+def long_lock_clears_overdue_breaks(app, check):
+    """Stepping away (locked 3m) with both breaks overdue credits both; no reminder on return."""
+    app.ctl("advance", 3000)
+    before = app.ctl("state")["remindersDelivered"]
+    check.eq(app.ctl("state")["due"], ["eye", "move"], "both overdue before lock")
+    app.ctl("lock")
+    app.ctl("advance", 180)
+    s = app.ctl("unlock")
+    check.eq(s["due"], [], "nothing due after return")
+    check.eq(app.ctl("advance", 300)["remindersDelivered"], before, "no reminder after returning")
+
+
+@scenario
+def sleep_wake_waits_grace_without_credit(app, check):
+    """With away-credit off, an overdue break survives sleep and waits out the grace period after wake."""
+    app.ctl("settings", json.dumps({"creditTimeAway": False}))
+    app.ctl("advance", 1300)
+    check.eq(app.ctl("state")["remindersDelivered"], 1, "eye reminder before sleep")
+    app.ctl("sleep")
+    app.ctl("set-time", "2026-10-26T10:30:00")  # asleep: no ticks for ~68 minutes
+    s = app.ctl("wake")
+    check.eq(len(app.events("gap")), 1, "wake seen as a gap, not replayed")
+    check.eq(s["worked"]["eye"], 1300, "sleep not counted as work")
+    check.eq(s["due"], ["eye"], "eye still overdue")
+    check.eq(app.ctl("advance", 59)["remindersDelivered"], 1, "no reminder during grace after wake")
+    app.ctl("advance", 1)
+    after = app.reminders()[1:]
+    # 10:30 is t=5400; grace ends 60s after wake. Not a meeting catch-up, so no "meeting is over" text.
+    check.eq([(r["kinds"], r["t"], r["catchUp"]) for r in after], [(["eye"], 5460, False)], "one reminder after grace")
+
+
+@scenario
+def wake_to_lock_screen_stays_away(app, check):
+    """Waking to the lock screen is still away; return is counted from sleep until unlock."""
+    app.ctl("advance", 600)
+    app.ctl("lock")
+    app.ctl("sleep")
+    app.ctl("set-time", "2026-10-26T09:40:00")
+    s = app.ctl("wake")
+    check.eq(s["away"], ["Screen locked"], "still away after wake")
+    check.eq(app.events("returned"), [], "no return yet")
+    app.ctl("advance", 5)
+    s = app.ctl("unlock")
+    check.eq([(r["seconds"], r["credited"]) for r in app.events("returned")], [(1805, ["eye", "move"])], "returned event")
+    check.eq(s["worked"], {"eye": 0, "move": 0}, "both credited")
+
+
+@scenario
+def display_sleep_counts_as_away(app, check):
+    """Displays sleeping (idle long enough for the screen to turn off) stops work time."""
+    app.ctl("advance", 600)
+    app.ctl("displays-sleep")
+    s = app.ctl("advance", 300)
+    check.eq(s["worked"]["eye"], 600, "no work time with displays asleep")
+    s = app.ctl("displays-wake")
+    check.eq(s["worked"], {"eye": 0, "move": 0}, "5 minutes away credits both")
+
+
+@scenario
+def quick_restart_restores_timers(app, check):
+    """Quitting and relaunching 5 minutes later restores progress; downtime is not work."""
+    app.ctl("advance", 900)
+    app.quit()
+    app.launch(start="2026-10-26T09:20:00")
+    s = app.ctl("state")
+    check.eq(s["worked"], {"eye": 900, "move": 900}, "restored work time")
+    check.eq([e["fresh"] for e in app.events("restored")], [False], "restored, not fresh")
+    check.eq(app.ctl("advance", 299)["remindersDelivered"], 0, "eye not due yet")
+    check.eq(app.ctl("advance", 1)["remindersDelivered"], 1, "eye due after 300 more working seconds")
+
+
+@scenario
+def overdue_after_restart_waits_grace(app, check):
+    """Relaunching with a break already overdue does not remind instantly; it waits out the grace period."""
+    app.ctl("advance", 1300)
+    app.quit()
+    app.launch(start="2026-10-26T09:23:00")
+    s = app.ctl("state")
+    check.eq(s["due"], ["eye"], "eye still overdue after restart")
+    check.eq(s["graceActive"], True, "grace running at launch")
+    check.eq(app.ctl("advance", 59)["remindersDelivered"], 0, "no reminder burst on launch")
+    check.eq(app.ctl("advance", 1)["remindersDelivered"], 1, "one reminder after grace")
+
+
+@scenario
+def long_downtime_starts_fresh(app, check):
+    """After 30+ minutes not running, or on a new day, timers start fresh."""
+    app.ctl("advance", 900)
+    app.quit()
+    app.launch(start="2026-10-26T10:00:00")
+    check.eq(app.ctl("state")["worked"], {"eye": 0, "move": 0}, "fresh after 45 min downtime")
+    app.ctl("advance", 600)
+    app.quit()
+    app.launch(start="2026-10-27T09:00:30")
+    check.eq(app.ctl("state")["worked"], {"eye": 0, "move": 0}, "fresh on a new day")
+    check.eq([e["fresh"] for e in app.events("restored")], [True, True], "both restores fresh")
+
+
+@scenario
+def hard_kill_loses_at_most_15s(app, check):
+    """A crash (SIGKILL) loses at most the 15s between periodic saves."""
+    app.ctl("advance", 607)
+    app.kill()
+    app.launch(start="2026-10-26T09:11:00")
+    check.between(app.ctl("state")["worked"]["eye"], 607 - 15, 607, "restored eye work time")
+
+
+@scenario
+def pause_and_presentation_survive_restart(app, check):
+    """Pause and Presentation mode are restored after a relaunch."""
+    app.ctl("presentation", "on")
+    app.ctl("advance", 60)
+    app.quit()
+    app.launch(start="2026-10-26T09:02:00")
+    s = app.ctl("state")
+    check.eq(s["presentationMode"], True, "presentation restored")
+    check(s["status"].startswith("Deferred · Presentation mode"), "status deferred", s["status"])
+    app.ctl("presentation", "off")
+    app.ctl("pause", 60)
+    app.quit()
+    app.launch(start="2026-10-26T09:05:00")
+    s = app.ctl("state")
+    check.eq(s["paused"], True, "pause restored")
+    check(s["status"].startswith("Paused until"), "status paused", s["status"])
+
+
+@scenario
+def break_finished_while_not_running(app, check):
+    """A break that would have ended while the app was closed is credited on relaunch."""
+    app.ctl("advance", 600)
+    app.ctl("take", "both")
+    app.quit()
+    app.launch(start="2026-10-26T09:15:00")
+    s = app.ctl("state")
+    check("activeBreak" not in s, "no active break", s.get("activeBreak"))
+    check.eq(s["worked"], {"eye": 0, "move": 0}, "break credited")
+    check.eq(len(app.events("breakCompleted")), 1, "completion recorded")
 
 
 # ---------------------------------------------------------------------------

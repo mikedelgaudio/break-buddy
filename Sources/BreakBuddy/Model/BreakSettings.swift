@@ -20,6 +20,8 @@ struct BreakSettings: Codable, Equatable {
     var workDays: Set<Int> = [2, 3, 4, 5, 6]
     var workStartMinutes = 9 * 60
     var workEndMinutes = 18 * 60
+    /// Time locked or asleep credits each break type whose duration it covers.
+    var creditTimeAway = true
     var launchAtLogin = false
 
     func interval(_ kind: BreakKind) -> TimeInterval {

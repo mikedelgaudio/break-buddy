@@ -17,6 +17,7 @@ struct SettingsView: View {
             Section("Reminders") {
                 stepper("Snooze", \.snoozeMinutes, in: 1...30, step: 1, unit: "min")
                 stepper("Wait after meetings", \.graceSeconds, in: 0...600, step: 15, unit: "sec")
+                Toggle("Count locked or asleep time as a break", isOn: binding(\.creditTimeAway))
             }
             Section("Working hours") {
                 Toggle("Only remind during working hours", isOn: binding(\.workingHoursEnabled))

@@ -6,18 +6,38 @@ struct ActiveBreak: Equatable {
     var endsAt: Date
 }
 
+/// Reasons the user is known to be away from the screen. Work time stops while any is active.
+enum AwayReason: String, CaseIterable, Comparable {
+    case locked, asleep, displaysAsleep, switchedOut
+
+    var label: String {
+        switch self {
+        case .locked: "Screen locked"
+        case .asleep: "Asleep"
+        case .displaysAsleep: "Displays asleep"
+        case .switchedOut: "Switched user"
+        }
+    }
+
+    static func < (a: AwayReason, b: AwayReason) -> Bool { a.rawValue < b.rawValue }
+}
+
 protocol ReminderSink: AnyObject {
     func remind(_ kinds: Set<BreakKind>, catchUp: Bool)
     func breakFinished(_ kinds: Set<BreakKind>)
     func clearReminders()
 }
 
-/// Owns the timers and every user action. The menu, notifications and the E2E control
-/// channel all drive the app through these same methods.
+/// Owns the timers and every user action. The menu, notifications, system events and the
+/// E2E control channel all drive the app through these same methods.
 @Observable
 final class AppModel {
     /// A tick further apart than this means sleep or a clock change: reconcile, don't replay.
     static let maxTickGap: TimeInterval = 15
+    /// How often timer state is written to disk while ticking (actions save immediately).
+    static let persistInterval: TimeInterval = 15
+    /// After this long not running (or on a new day) a relaunch starts with fresh timers.
+    static let restartResetAfter: TimeInterval = 30 * 60
 
     private(set) var settings: BreakSettings
     private(set) var now: Date
@@ -28,22 +48,28 @@ final class AppModel {
     private(set) var simulatedSignals: Set<String> = []
     private(set) var pausedUntil: Date?
     private(set) var activeBreak: ActiveBreak?
+    private(set) var awayReasons: Set<AwayReason> = []
     private(set) var remindersDelivered = 0
 
     @ObservationIgnored let clock: AppClock
     @ObservationIgnored private let store: SettingsStore
+    @ObservationIgnored private let snapshots: SnapshotStore
     @ObservationIgnored weak var sink: ReminderSink?
     @ObservationIgnored var onEvent: (String, [String: Any]) -> Void = { _, _ in }
     @ObservationIgnored private var lastTick: Date
+    @ObservationIgnored private var lastPersist: Date
+    @ObservationIgnored private var awaySince: Date?
     @ObservationIgnored private var deferredWhileDue = false
     @ObservationIgnored private var timer: Timer?
 
-    init(clock: AppClock, store: SettingsStore) {
+    init(clock: AppClock, store: SettingsStore, snapshots: SnapshotStore) {
         self.clock = clock
         self.store = store
+        self.snapshots = snapshots
         settings = store.load()
         now = clock.now
         lastTick = clock.now
+        lastPersist = clock.now
     }
 
     func startRealTimeTicking() {
@@ -63,6 +89,11 @@ final class AppModel {
         return reasons.sorted()
     }
 
+    var isAway: Bool { !awayReasons.isEmpty }
+
+    /// Away counts as suppression too, so returning gets the same grace period as a meeting ending.
+    private var isSuppressed: Bool { isAway || !suppressionReasons.isEmpty }
+
     var isWorkingTime: Bool { settings.isWorkingTime(now) }
 
     // MARK: Tick
@@ -74,33 +105,64 @@ final class AppModel {
         now = current
         guard elapsed > 0 else { return }
         guard elapsed <= Self.maxTickGap else {
-            onEvent("gap", ["seconds": elapsed])
+            emit("gap", ["seconds": elapsed])
             return
         }
 
         if let until = pausedUntil, current >= until {
             pausedUntil = nil
-            onEvent("pauseEnded", [:])
+            emit("pauseEnded", [:])
         }
         if presentationMode, let until = presentationUntil, current >= until {
             setPresentationMode(false)
         }
+        if current.timeIntervalSince(lastPersist) >= Self.persistInterval { persist() }
         if let active = activeBreak {
             if current >= active.endsAt { finishBreak(active) }
             return
         }
-        guard pausedUntil == nil, isWorkingTime else { return }
+        guard pausedUntil == nil, !isAway, isWorkingTime else { return }
 
         scheduler.accumulate(elapsed)
         let due = self.due
-        let suppressed = !suppressionReasons.isEmpty
+        let suppressed = isSuppressed
         if suppressed && !due.isEmpty { deferredWhileDue = true }
         if let kinds = coordinator.evaluate(now: current, due: due, suppressed: suppressed, settings: settings) {
             remindersDelivered += 1
-            onEvent("reminder", ["kinds": kinds.sorted().map(\.rawValue), "catchUp": deferredWhileDue])
+            emit("reminder", ["kinds": kinds.sorted().map(\.rawValue), "catchUp": deferredWhileDue])
             sink?.remind(kinds, catchUp: deferredWhileDue)
             deferredWhileDue = false
         }
+    }
+
+    // MARK: Away (lock, sleep)
+
+    func awayBegan(_ reason: AwayReason) {
+        guard !awayReasons.contains(reason) else { return }
+        if awayReasons.isEmpty { awaySince = now }
+        awayReasons.insert(reason)
+        suppressionChanged()
+        emit("awayBegan", ["reason": reason.rawValue])
+    }
+
+    /// When the last away reason clears, time away credits each break type whose duration
+    /// it covered (if enabled). Locked or asleep is evidence of being away; idle input is not.
+    func awayEnded(_ reason: AwayReason) {
+        guard awayReasons.remove(reason) != nil else { return }
+        guard awayReasons.isEmpty, let since = awaySince else {
+            emit("awayEnded", ["reason": reason.rawValue])
+            return
+        }
+        awaySince = nil
+        let seconds = max(0, now.timeIntervalSince(since))
+        let credited = settings.creditTimeAway
+            ? Set(BreakKind.allCases.filter { seconds >= settings.duration($0) })
+            : []
+        scheduler.reset(credited)
+        coordinator.credit(credited)
+        if !credited.isEmpty { sink?.clearReminders() }
+        suppressionChanged()
+        emit("returned", ["reason": reason.rawValue, "seconds": seconds, "credited": credited.sorted().map(\.rawValue)])
     }
 
     // MARK: Actions
@@ -110,7 +172,7 @@ final class AppModel {
         let length = kinds.map(settings.duration).max() ?? 0
         activeBreak = ActiveBreak(kinds: kinds, endsAt: now.addingTimeInterval(length))
         sink?.clearReminders()
-        onEvent("breakStarted", ["kinds": kinds.sorted().map(\.rawValue), "seconds": length])
+        emit("breakStarted", ["kinds": kinds.sorted().map(\.rawValue), "seconds": length])
     }
 
     /// "Start break" from a reminder: whatever is due, or an eye break if nothing is.
@@ -121,14 +183,14 @@ final class AppModel {
     func endBreakEarly() {
         guard let active = activeBreak else { return }
         activeBreak = nil
-        onEvent("breakSkipped", ["kinds": active.kinds.sorted().map(\.rawValue)])
+        emit("breakSkipped", ["kinds": active.kinds.sorted().map(\.rawValue)])
     }
 
     private func finishBreak(_ active: ActiveBreak) {
         activeBreak = nil
         scheduler.reset(active.kinds)
         coordinator.credit(active.kinds)
-        onEvent("breakCompleted", ["kinds": active.kinds.sorted().map(\.rawValue)])
+        emit("breakCompleted", ["kinds": active.kinds.sorted().map(\.rawValue)])
         sink?.breakFinished(active.kinds)
     }
 
@@ -138,7 +200,7 @@ final class AppModel {
         scheduler.reset(kinds)
         coordinator.credit(kinds)
         sink?.clearReminders()
-        onEvent("credited", ["kinds": kinds.sorted().map(\.rawValue)])
+        emit("credited", ["kinds": kinds.sorted().map(\.rawValue)])
     }
 
     func creditDue() { credit(due) }
@@ -146,7 +208,7 @@ final class AppModel {
     func snooze() {
         coordinator.snooze(now: now, settings: settings)
         sink?.clearReminders()
-        onEvent("snoozed", ["minutes": settings.snoozeMinutes])
+        emit("snoozed", ["minutes": settings.snoozeMinutes])
     }
 
     func pause(minutes: Double) { pause(until: now.addingTimeInterval(minutes * 60)) }
@@ -159,13 +221,13 @@ final class AppModel {
     private func pause(until date: Date) {
         pausedUntil = date
         sink?.clearReminders()
-        onEvent("paused", ["until": date.timeIntervalSince1970])
+        emit("paused", ["until": date.timeIntervalSince1970])
     }
 
     func resume() {
         guard pausedUntil != nil else { return }
         pausedUntil = nil
-        onEvent("resumed", [:])
+        emit("resumed", [:])
     }
 
     func setPresentationMode(_ on: Bool, minutes: Double? = nil) {
@@ -173,17 +235,17 @@ final class AppModel {
         presentationUntil = on ? minutes.map { now.addingTimeInterval($0 * 60) } : nil
         if on { sink?.clearReminders() }
         suppressionChanged()
-        onEvent(on ? "presentationStarted" : "presentationEnded", minutes.map { ["minutes": $0] } ?? [:])
+        emit(on ? "presentationStarted" : "presentationEnded", minutes.map { ["minutes": $0] } ?? [:])
     }
 
     func setSimulatedSignal(_ name: String, active: Bool) {
         if active { simulatedSignals.insert(name) } else { simulatedSignals.remove(name) }
         suppressionChanged()
-        onEvent("signal", ["name": name, "active": active])
+        emit("signal", ["name": name, "active": active])
     }
 
     private func suppressionChanged() {
-        coordinator.updateSuppression(!suppressionReasons.isEmpty, now: now, settings: settings)
+        coordinator.updateSuppression(isSuppressed, now: now, settings: settings)
     }
 
     func updateSettings(_ change: (inout BreakSettings) -> Void) {
@@ -192,6 +254,61 @@ final class AppModel {
         guard next != settings else { return }
         settings = next
         store.save(next)
-        onEvent("settingsChanged", [:])
+        emit("settingsChanged", [:])
+    }
+
+    // MARK: Persistence
+
+    private func emit(_ event: String, _ data: [String: Any]) {
+        onEvent(event, data)
+        persist()
+    }
+
+    func persist() {
+        lastPersist = now
+        snapshots.save(TimerSnapshot(
+            savedAt: now,
+            worked: Dictionary(uniqueKeysWithValues: BreakKind.allCases.map { ($0.rawValue, scheduler.workedSeconds($0)) }),
+            pausedUntil: pausedUntil,
+            presentationMode: presentationMode,
+            presentationUntil: presentationUntil,
+            snoozedUntil: coordinator.snoozedUntil,
+            activeBreak: activeBreak.map { .init(kinds: $0.kinds.sorted(), endsAt: $0.endsAt) }
+        ))
+    }
+
+    /// Restores the last snapshot on launch. Time the app wasn't running is neither work nor
+    /// a credited break; a long downtime or a new day simply starts fresh timers. Breaks
+    /// already due wait out a grace period instead of firing the moment the app opens.
+    func restoreSavedState() {
+        guard let saved = snapshots.load() else { return }
+        let downtime = now.timeIntervalSince(saved.savedAt)
+        pausedUntil = saved.pausedUntil.flatMap { $0 > now ? $0 : nil }
+
+        if downtime >= Self.restartResetAfter || !Calendar.current.isDate(saved.savedAt, inSameDayAs: now) {
+            emit("restored", ["fresh": true, "downtime": downtime])
+            return
+        }
+
+        if saved.presentationMode, saved.presentationUntil.map({ $0 > now }) ?? true {
+            presentationMode = true
+            presentationUntil = saved.presentationUntil
+        }
+        var worked: [BreakKind: TimeInterval] = [:]
+        for kind in BreakKind.allCases { worked[kind] = saved.worked[kind.rawValue] ?? 0 }
+        scheduler.restore(worked)
+        if let snooze = saved.snoozedUntil, snooze > now { coordinator.restoreSnooze(until: snooze) }
+        if let savedBreak = saved.activeBreak {
+            let kinds = Set(savedBreak.kinds)
+            if savedBreak.endsAt > now {
+                activeBreak = ActiveBreak(kinds: kinds, endsAt: savedBreak.endsAt)
+            } else {
+                scheduler.reset(kinds)
+                emit("breakCompleted", ["kinds": savedBreak.kinds.map(\.rawValue), "whileNotRunning": true])
+            }
+        }
+        coordinator.updateSuppression(isSuppressed, now: now, settings: settings)
+        if !isSuppressed && !due.isEmpty { coordinator.beginGrace(now: now, settings: settings) }
+        emit("restored", ["fresh": false, "downtime": downtime])
     }
 }

@@ -43,28 +43,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: AppModel
     private var sink: ReminderSink?
     private var control: TestControl?
+    private var systemEvents: SystemEvents?
     private var activity: NSObjectProtocol?
 
     override init() {
         if let config = TestConfig.fromEnvironment() {
-            model = AppModel(clock: ManualClock(start: config.start), store: SettingsStore(url: config.stateDir.appending(path: "settings.json")))
+            model = AppModel(clock: ManualClock(start: config.start),
+                             store: SettingsStore(url: config.stateDir.appending(path: "settings.json")),
+                             snapshots: SnapshotStore(url: config.stateDir.appending(path: "timers.json")))
             super.init()
             let control = TestControl(model: model, config: config)
             self.control = control
             sink = control
         } else {
             let support = URL.applicationSupportDirectory.appending(path: "BreakBuddy")
-            model = AppModel(clock: SystemClock(), store: SettingsStore(url: support.appending(path: "settings.json")))
+            model = AppModel(clock: SystemClock(),
+                             store: SettingsStore(url: support.appending(path: "settings.json")),
+                             snapshots: SnapshotStore(url: support.appending(path: "timers.json")))
             super.init()
             sink = NotificationSink(model: model)
-            // Menu-bar apps get App Nap'd; keep the 1s tick honest without blocking sleep.
-            activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Break timers")
-            model.startRealTimeTicking()
         }
         model.sink = sink
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        control?.start()
+        model.restoreSavedState()
+        if let control {
+            control.start()
+        } else {
+            systemEvents = SystemEvents(model: model)
+            // Menu-bar apps get App Nap'd; keep the 1s tick honest without blocking sleep.
+            activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Break timers")
+            model.startRealTimeTicking()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        model.persist()
     }
 }

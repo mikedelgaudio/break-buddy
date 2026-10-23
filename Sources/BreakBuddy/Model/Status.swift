@@ -3,6 +3,9 @@ import Foundation
 /// Human-readable status, shown in the menu and captured by the E2E harness.
 extension AppModel {
     var statusText: String {
+        if isAway {
+            return (["Away"] + awayReasons.sorted().map(\.label)).joined(separator: " · ")
+        }
         if let active = activeBreak {
             return "On break · \(Self.short(active.endsAt.timeIntervalSince(now))) left"
         }
@@ -22,6 +25,7 @@ extension AppModel {
     }
 
     var menuBarSymbol: String {
+        if isAway { return "lock" }
         if activeBreak != nil { return "cup.and.saucer" }
         if pausedUntil != nil { return "pause.circle" }
         if !suppressionReasons.isEmpty { return "moon" }
@@ -31,7 +35,7 @@ extension AppModel {
 
     var menuBarText: String {
         if let active = activeBreak { return Self.short(active.endsAt.timeIntervalSince(now)) }
-        if pausedUntil != nil || !suppressionReasons.isEmpty || !due.isEmpty || !isWorkingTime { return "" }
+        if isAway || pausedUntil != nil || !suppressionReasons.isEmpty || !due.isEmpty || !isWorkingTime { return "" }
         return Self.short(BreakKind.allCases.map { scheduler.remaining($0, settings) }.min() ?? 0)
     }
 
