@@ -66,12 +66,13 @@ errors, the menu says *Meeting detection unavailable* and existing evidence is h
 5 minutes rather than treated as a meeting end. Dictation, Siri and sound recognition are ignored
 by default; any app seen using the mic can be ignored from Settings.
 
-Not detected: screen sharing on its own, or attending with mic **and** camera off (whether
-Teams keeps mic input running while muted is unverified — use Presentation mode). Check the
-real detector any time with:
+Not detected: screen sharing on its own. A Meet call in Chrome kept mic input running while
+muted (see [docs/detection-runs](docs/detection-runs/README.md)); Teams desktop is still
+unverified, so Presentation mode stays available. Check the real detector any time with:
 
 ```bash
-"build/Break Buddy.app/Contents/MacOS/BreakBuddy" probe
+"build/Break Buddy.app/Contents/MacOS/BreakBuddy" probe            # one JSON snapshot
+"build/Break Buddy.app/Contents/MacOS/BreakBuddy" probe --watch    # timestamped change log
 ```
 
 ## Layout

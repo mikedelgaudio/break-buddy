@@ -32,6 +32,19 @@ final class CoreAudioDetector: ActivityDetector {
         return DetectionReading(signals: signals)
     }
 
+    /// Apps currently playing audio. Diagnostic only for now: a candidate signal for
+    /// attending a call with mic and camera off, pending real-call data.
+    func audioOutputApps() -> Set<String> {
+        var names: Set<String> = []
+        for process in audioObjects(system, kAudioHardwarePropertyProcessObjectList) ?? []
+        where uint32(process, kAudioProcessPropertyIsRunningOutput) == 1 {
+            guard let pid = pid(process), pid != ownPID else { continue }
+            let (appID, appName) = identify(pid: pid, bundleID: string(process, kAudioProcessPropertyBundleID))
+            names.insert(appName ?? appID ?? "pid \(pid)")
+        }
+        return names
+    }
+
     /// Maps helper processes (e.g. `com.google.Chrome.helper`) to their parent app.
     private func identify(pid: pid_t, bundleID: String?) -> (String?, String?) {
         var appID = bundleID.flatMap { $0.isEmpty ? nil : $0 }

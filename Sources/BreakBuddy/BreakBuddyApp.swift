@@ -7,6 +7,9 @@ enum Entry {
         if args.count >= 2, args[1] == "ctl" {
             exit(ControlClient.run(Array(args.dropFirst(2))))
         }
+        if args.count >= 3, args[1] == "probe", args[2] == "--watch" {
+            DetectionProbe.watch()
+        }
         if args.count >= 2, args[1] == "probe" {
             exit(DetectionProbe.run(samples: args.count >= 3 ? Int(args[2]) ?? 5 : 5))
         }

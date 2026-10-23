@@ -23,4 +23,39 @@ enum DetectionProbe {
         FileHandle.standardOutput.write(data + Data("\n".utf8))
         return reading.error == nil ? 0 : 1
     }
+
+    /// `BreakBuddy probe --watch`: polls twice a second and prints one timestamped line each
+    /// time the evidence, detector availability, or set of apps playing audio changes. Raw
+    /// readings, no debounce, so short blips and mute gaps are visible. Runs until Ctrl-C.
+    static func watch() -> Never {
+        let detector = CoreAudioDetector()
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss.S"
+        var lastSignals: Set<ActivitySignal> = []
+        var lastError: String?
+        var lastOutput: Set<String> = []
+        var first = true
+        func emit(_ text: String) { FileHandle.standardOutput.write(Data("\(clock.string(from: Date()))  \(text)\n".utf8)) }
+
+        emit("watching (raw readings, polled every 0.5s; Ctrl-C to stop)")
+        while true {
+            let reading = detector.read()
+            let output = detector.audioOutputApps()
+            if first || reading.signals != lastSignals || reading.error != lastError || output != lastOutput {
+                var changes: [String] = []
+                changes += reading.signals.subtracting(lastSignals).sorted().map { "+ \($0.label)" }
+                changes += lastSignals.subtracting(reading.signals).sorted().map { "- \($0.label)" }
+                if reading.error != lastError { changes.append(reading.error.map { "! \($0)" } ?? "! detector OK") }
+                if output != lastOutput { changes.append("audio out: \(output.isEmpty ? "none" : output.sorted().joined(separator: ", "))") }
+                let active = reading.signals.isEmpty ? "none" : reading.signals.sorted().map(\.label).joined(separator: ", ")
+                emit("\(changes.isEmpty ? "initial" : changes.joined(separator: "; "))  |  evidence: \(active)")
+                lastSignals = reading.signals
+                lastError = reading.error
+                lastOutput = output
+                first = false
+            }
+            // Pump the run loop so NSRunningApplication sees apps launched after we started.
+            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        }
+    }
 }

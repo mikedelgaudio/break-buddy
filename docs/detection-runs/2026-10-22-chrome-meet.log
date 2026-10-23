@@ -1,0 +1,10 @@
+21:17:51.1  watching (raw readings, polled every 0.5s; Ctrl-C to stop)
+21:17:51.4  initial  |  evidence: none
+21:26:07.4  + Google Chrome using microphone  |  evidence: Google Chrome using microphone
+21:26:07.9  audio out: Google Chrome  |  evidence: Google Chrome using microphone
+21:26:09.5  + Camera in use  |  evidence: Camera in use, Google Chrome using microphone
+21:26:14.1  - Camera in use  |  evidence: Google Chrome using microphone
+21:26:19.8  + Camera in use  |  evidence: Camera in use, Google Chrome using microphone
+21:26:20.3  - Camera in use  |  evidence: Google Chrome using microphone
+21:26:37.9  - Google Chrome using microphone  |  evidence: none
+21:26:38.9  audio out: none  |  evidence: none
