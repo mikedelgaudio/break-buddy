@@ -30,7 +30,8 @@ over a distributed notification scoped to `BB_STATE_DIR`. Each run writes
 
 Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentation on|off [min]`,
 `signal <name> on|off`, `pause <min>|tomorrow`, `resume`, `lock`, `unlock`, `sleep`, `wake`,
-`displays-sleep`, `displays-wake`, `take eye|move|both`, `end-break`,
+`displays-sleep`, `displays-wake`, `detect mic <bundleID> <name> on|off`, `detect mic-unattributed on|off`,
+`detect camera on|off`, `detect fail <message>`, `detect ok`, `take eye|move|both`, `end-break`,
 `credit eye|move|both|due`, `snooze`, `settings '<json patch>'`, `state`, `quit`.
 
 ## Time-away and restart policy
@@ -47,6 +48,32 @@ Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentati
   down, or on a new day, timers start fresh. Breaks already overdue wait out the grace period.
   Pause, Presentation mode, snooze and an in-progress break are restored too.
 
+## Meeting detection
+
+Polls every 2s, no permission prompts:
+
+- **Microphone, per app** — Core Audio process objects (`kAudioProcessPropertyIsRunningInput`,
+  macOS 14.4+). Helper processes map to their parent app (`com.google.Chrome.helper` → Chrome).
+  If input is running but no process claims it, the evidence is just "Microphone in use".
+- **Camera** — CoreMediaIO `kCMIODevicePropertyDeviceIsRunningSomewhere` on any video device.
+  Not attributable to an app.
+
+The status shows what was actually observed — `Deferred · Microsoft Teams using microphone` —
+never an inferred "Teams meeting". Evidence must persist 5s to count (blips are ignored) and
+may vanish for up to 10s before it clears (short mutes), then the normal 60s grace applies, so
+a longer mute that ends within the grace period also never produces a reminder. If the detector
+errors, the menu says *Meeting detection unavailable* and existing evidence is held for up to
+5 minutes rather than treated as a meeting end. Dictation, Siri and sound recognition are ignored
+by default; any app seen using the mic can be ignored from Settings.
+
+Not detected: screen sharing on its own, or attending with mic **and** camera off (whether
+Teams keeps mic input running while muted is unverified — use Presentation mode). Check the
+real detector any time with:
+
+```bash
+"build/Break Buddy.app/Contents/MacOS/BreakBuddy" probe
+```
+
 ## Layout
 
 | Path | Responsibility |
@@ -56,6 +83,9 @@ Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentati
 | `Model/AppModel.swift` | Tick loop and every user action (menu, notifications, ctl all call these) |
 | `Model/Status.swift` | Status strings shown in the menu |
 | `Model/TimerSnapshot.swift` | Saved timer state (`timers.json`) |
+| `Detection/CoreAudioDetector.swift` | Real mic-per-process and camera readings |
+| `Detection/ActivitySignal.swift` | Evidence types, detector protocol, fake detector for E2E |
+| `Detection/DetectionProbe.swift` | `BreakBuddy probe` diagnostic |
 | `System/SystemEvents.swift` | Sleep, display sleep, screen lock, user switching |
 | `Reminders/NotificationSink.swift` | Native notifications with Start / Snooze / Already took a break |
 | `Control/TestControl.swift` | Test mode and the `ctl` client |
@@ -65,5 +95,6 @@ Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentati
 
 1. ✅ Two timers, persistent settings, menu controls, manual Presentation mode, catch-up flow (simulated signals)
 2. ✅ Sleep/wake, display sleep and lock handling; timer state persisted across restarts
-3. Local detection: Core Audio mic-in-use (per process), camera in use
-4. Optional full-screen break overlay, multi-display
+3. ✅ Local detection: Core Audio mic-in-use (per process), camera in use
+4. Validate against real Teams calls (muted, camera off, sharing); tune delays
+5. Optional full-screen break overlay, multi-display

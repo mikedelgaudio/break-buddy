@@ -2,12 +2,14 @@ import Foundation
 
 enum SuppressionReason: Hashable, Comparable {
     case presentationMode
-    /// Injected by the E2E harness until real detectors exist.
+    case detected(ActivitySignal)
+    /// Injected by the E2E harness to exercise the coordinator without any detector.
     case simulated(String)
 
     var label: String {
         switch self {
         case .presentationMode: "Presentation mode"
+        case .detected(let signal): signal.label
         case .simulated(let name): "Simulated \(name)"
         }
     }

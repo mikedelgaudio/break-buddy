@@ -7,6 +7,9 @@ enum Entry {
         if args.count >= 2, args[1] == "ctl" {
             exit(ControlClient.run(Array(args.dropFirst(2))))
         }
+        if args.count >= 2, args[1] == "probe" {
+            exit(DetectionProbe.run(samples: args.count >= 3 ? Int(args[2]) ?? 5 : 5))
+        }
         BreakBuddyApp.main()
     }
 }
@@ -55,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let control = TestControl(model: model, config: config)
             self.control = control
             sink = control
+            model.detector = control.detector
         } else {
             let support = URL.applicationSupportDirectory.appending(path: "BreakBuddy")
             model = AppModel(clock: SystemClock(),
@@ -62,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              snapshots: SnapshotStore(url: support.appending(path: "timers.json")))
             super.init()
             sink = NotificationSink(model: model)
+            model.detector = CoreAudioDetector()
         }
         model.sink = sink
     }

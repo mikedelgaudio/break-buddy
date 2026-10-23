@@ -19,6 +19,21 @@ struct SettingsView: View {
                 stepper("Wait after meetings", \.graceSeconds, in: 0...600, step: 15, unit: "sec")
                 Toggle("Count locked or asleep time as a break", isOn: binding(\.creditTimeAway))
             }
+            Section("Meeting detection") {
+                Toggle("Defer while an app is using the microphone", isOn: binding(\.detectMicrophone))
+                Toggle("Defer while the camera is in use", isOn: binding(\.detectCamera))
+                LabeledContent("Status", value: model.detectionStatusText)
+                let seen = model.seenMicApps.sorted { $0.value < $1.value }
+                if !seen.isEmpty {
+                    ForEach(seen, id: \.key) { id, name in
+                        Toggle("Ignore \(name)", isOn: ignoreBinding(id))
+                            .help(id)
+                    }
+                }
+                Text("Dictation and Siri are ignored by default. Apps appear here after they use the microphone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Working hours") {
                 Toggle("Only remind during working hours", isOn: binding(\.workingHoursEnabled))
                 if model.settings.workingHoursEnabled {
@@ -59,6 +74,16 @@ struct SettingsView: View {
         Stepper(value: binding(keyPath), in: range, step: step) {
             LabeledContent(title, value: "\(Int(model.settings[keyPath: keyPath])) \(unit)")
         }
+    }
+
+    private func ignoreBinding(_ appID: String) -> Binding<Bool> {
+        Binding(
+            get: { model.settings.ignoredApps.contains(appID) },
+            set: { on in model.updateSettings { s in
+                s.ignoredApps.removeAll { $0 == appID }
+                if on { s.ignoredApps.append(appID) }
+            } }
+        )
     }
 
     private func dayBinding(_ weekday: Int) -> Binding<Bool> {

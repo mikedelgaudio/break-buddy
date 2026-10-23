@@ -38,6 +38,13 @@ final class AppModel {
     static let persistInterval: TimeInterval = 15
     /// After this long not running (or on a new day) a relaunch starts with fresh timers.
     static let restartResetAfter: TimeInterval = 30 * 60
+    /// Detection: poll cadence, how long evidence must persist to count (filters blips), how
+    /// long it may vanish before a call is considered over (rides out mute/unmute), and how
+    /// long evidence is held while detection is failing.
+    static let pollInterval: TimeInterval = 2
+    static let onsetDelay: TimeInterval = 5
+    static let releaseDelay: TimeInterval = 10
+    static let holdOnFailure: TimeInterval = 5 * 60
 
     private(set) var settings: BreakSettings
     private(set) var now: Date
@@ -50,11 +57,21 @@ final class AppModel {
     private(set) var activeBreak: ActiveBreak?
     private(set) var awayReasons: Set<AwayReason> = []
     private(set) var remindersDelivered = 0
+    /// Debounced detector evidence currently deferring reminders.
+    private(set) var detectedSignals: [ActivitySignal] = []
+    private(set) var detectionError: String?
+    /// Apps seen using the microphone this session (bundle ID → name), for the ignore list UI.
+    private(set) var seenMicApps: [String: String] = [:]
 
     @ObservationIgnored let clock: AppClock
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private let snapshots: SnapshotStore
     @ObservationIgnored weak var sink: ReminderSink?
+    @ObservationIgnored var detector: ActivityDetector?
+    @ObservationIgnored private var lastPoll = Date.distantPast
+    @ObservationIgnored private var lastGoodReading: Date?
+    @ObservationIgnored private var firstSeen: [ActivitySignal: Date] = [:]
+    @ObservationIgnored private var lastSeen: [ActivitySignal: Date] = [:]
     @ObservationIgnored var onEvent: (String, [String: Any]) -> Void = { _, _ in }
     @ObservationIgnored private var lastTick: Date
     @ObservationIgnored private var lastPersist: Date
@@ -85,6 +102,7 @@ final class AppModel {
 
     var suppressionReasons: [SuppressionReason] {
         var reasons: [SuppressionReason] = presentationMode ? [.presentationMode] : []
+        reasons += detectedSignals.map(SuppressionReason.detected)
         reasons += simulatedSignals.map(SuppressionReason.simulated)
         return reasons.sorted()
     }
@@ -103,6 +121,7 @@ final class AppModel {
         let elapsed = current.timeIntervalSince(lastTick)
         lastTick = current
         now = current
+        pollDetection()
         guard elapsed > 0 else { return }
         guard elapsed <= Self.maxTickGap else {
             emit("gap", ["seconds": elapsed])
@@ -132,6 +151,55 @@ final class AppModel {
             emit("reminder", ["kinds": kinds.sorted().map(\.rawValue), "catchUp": deferredWhileDue])
             sink?.remind(kinds, catchUp: deferredWhileDue)
             deferredWhileDue = false
+        }
+    }
+
+    // MARK: Detection
+
+    private func pollDetection() {
+        guard let detector, now.timeIntervalSince(lastPoll) >= Self.pollInterval else { return }
+        lastPoll = now
+        ingest(detector.read())
+    }
+
+    /// Debounces raw readings into evidence. A signal must be seen across `onsetDelay` to
+    /// count, and stays until it has been absent for `releaseDelay`.
+    func ingest(_ reading: DetectionReading) {
+        if let error = reading.error {
+            if detectionError == nil { emit("detectionUnavailable", ["error": error]) }
+            detectionError = error
+            // A failing detector is not evidence the call ended: hold what we had, for a while.
+            if let good = lastGoodReading, now.timeIntervalSince(good) < Self.holdOnFailure {
+                for signal in detectedSignals { lastSeen[signal] = now }
+            }
+        } else {
+            if detectionError != nil { emit("detectionRestored", [:]) }
+            detectionError = nil
+            lastGoodReading = now
+            for signal in reading.signals {
+                if signal.kind == .microphone, let id = signal.appID { seenMicApps[id] = signal.appName ?? id }
+                guard counts(signal) else { continue }
+                if firstSeen[signal] == nil { firstSeen[signal] = now }
+                lastSeen[signal] = now
+            }
+        }
+        for (signal, seen) in lastSeen where now.timeIntervalSince(seen) > Self.releaseDelay {
+            lastSeen[signal] = nil
+            firstSeen[signal] = nil
+        }
+        let confirmed = Set(detectedSignals).filter { lastSeen[$0] != nil }
+            .union(firstSeen.filter { signal, first in (lastSeen[signal] ?? first).timeIntervalSince(first) >= Self.onsetDelay }.keys)
+        let active = confirmed.sorted()
+        guard active != detectedSignals else { return }
+        detectedSignals = active
+        suppressionChanged()
+        emit("detection", ["active": active.map(\.label)])
+    }
+
+    private func counts(_ signal: ActivitySignal) -> Bool {
+        switch signal.kind {
+        case .microphone: settings.detectMicrophone && !(signal.appID.map(settings.ignoredApps.contains) ?? false)
+        case .camera: settings.detectCamera
         }
     }
 

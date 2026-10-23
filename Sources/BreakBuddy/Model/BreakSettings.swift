@@ -22,7 +22,20 @@ struct BreakSettings: Codable, Equatable {
     var workEndMinutes = 18 * 60
     /// Time locked or asleep credits each break type whose duration it covers.
     var creditTimeAway = true
+    var detectMicrophone = true
+    var detectCamera = true
+    /// Bundle IDs whose microphone use never counts as a call (dictation, Siri, sound recognition…).
+    var ignoredApps: [String] = BreakSettings.defaultIgnoredApps
     var launchAtLogin = false
+
+    static let defaultIgnoredApps = [
+        "com.apple.CoreSpeech",
+        "com.apple.SpeechRecognitionCore.speechrecognitiond",
+        "com.apple.assistantd",
+        "com.apple.accessibility.heard",
+        "com.apple.universalaccessd",
+        "com.apple.cmio.ContinuityCaptureAgent",
+    ]
 
     func interval(_ kind: BreakKind) -> TimeInterval {
         (kind == .eye ? eyeIntervalMinutes : moveIntervalMinutes) * 60

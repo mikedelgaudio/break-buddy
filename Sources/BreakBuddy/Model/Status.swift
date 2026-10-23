@@ -39,6 +39,13 @@ extension AppModel {
         return Self.short(BreakKind.allCases.map { scheduler.remaining($0, settings) }.min() ?? 0)
     }
 
+    var detectionStatusText: String {
+        let watching = [settings.detectMicrophone ? "microphone" : nil, settings.detectCamera ? "camera" : nil].compactMap { $0 }
+        if watching.isEmpty { return "Meeting detection off" }
+        if detectionError != nil { return "Meeting detection unavailable" }
+        return "Watching \(watching.joined(separator: " and "))"
+    }
+
     static func overdue(_ kinds: Set<BreakKind>) -> String? {
         switch kinds {
         case [.eye]: "Eye break overdue"

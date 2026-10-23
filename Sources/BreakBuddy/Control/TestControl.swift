@@ -41,6 +41,7 @@ final class TestControl: ReminderSink {
     private let clock: ManualClock
     private let config: TestConfig
     private var observer: NSObjectProtocol?
+    let detector = FakeDetector()
 
     init(model: AppModel, config: TestConfig) {
         self.model = model
@@ -124,6 +125,23 @@ final class TestControl: ReminderSink {
             }
         case "resume":
             model.resume()
+        case "detect":
+            // detect mic <appID> <name> on|off · detect mic-unattributed on|off · detect camera on|off
+            // detect fail <message> · detect ok
+            switch try arg(0) {
+            case "mic":
+                let signal = ActivitySignal(kind: .microphone, appID: try arg(1), appName: try arg(2))
+                if try onOff(arg(3)) { detector.signals.insert(signal) } else { detector.signals.remove(signal) }
+            case "mic-unattributed":
+                let signal = ActivitySignal(kind: .microphone)
+                if try onOff(arg(1)) { detector.signals.insert(signal) } else { detector.signals.remove(signal) }
+            case "camera":
+                let signal = ActivitySignal(kind: .camera)
+                if try onOff(arg(1)) { detector.signals.insert(signal) } else { detector.signals.remove(signal) }
+            case "fail": detector.error = try arg(1)
+            case "ok": detector.error = nil
+            default: throw CommandError(message: "unknown detect target \(args[0])")
+            }
         case "lock": model.awayBegan(.locked)
         case "unlock": model.awayEnded(.locked)
         case "sleep": model.awayBegan(.asleep)
@@ -175,6 +193,12 @@ final class TestControl: ReminderSink {
             "due": m.due.sorted().map(\.rawValue),
             "suppression": m.suppressionReasons.map(\.label),
             "away": m.awayReasons.sorted().map(\.label),
+            "detection": [
+                "status": m.detectionStatusText,
+                "available": m.detectionError == nil,
+                "active": m.detectedSignals.map(\.label),
+                "seenMicApps": m.seenMicApps,
+            ],
             "paused": m.pausedUntil != nil,
             "presentationMode": m.presentationMode,
             "graceActive": m.coordinator.graceEndsAt != nil,

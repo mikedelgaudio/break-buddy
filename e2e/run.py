@@ -480,6 +480,147 @@ def break_finished_while_not_running(app, check):
     check.eq(len(app.events("breakCompleted")), 1, "completion recorded")
 
 
+# --- Milestone 3: meeting detection (fake detector, real debounce/evidence path) ---
+# The detector is polled every 2s; evidence must persist 5s to count and may vanish for
+# 10s before it clears (then the 60s grace period starts). Expect a catch-up ~70–72s
+# after the last signal disappears.
+
+TEAMS = ("com.microsoft.teams2", "Microsoft Teams")
+
+
+@scenario
+def teams_mic_defers_then_catches_up(app, check):
+    """Teams using the microphone defers an eye break; one catch-up arrives after the call, release delay and grace."""
+    app.ctl("advance", 600)
+    app.ctl("detect", "mic", *TEAMS, "on")
+    s = app.ctl("advance", 10)
+    check.eq(s["detection"]["active"], ["Microsoft Teams using microphone"], "evidence")
+    s = app.ctl("advance", 800)
+    check.eq(s["remindersDelivered"], 0, "no reminder during the call")
+    check.eq(s["status"], "Deferred · Microsoft Teams using microphone · Eye break overdue", "status names the evidence")
+    app.ctl("detect", "mic", *TEAMS, "off")
+    check.eq(app.ctl("advance", 68)["remindersDelivered"], 0, "quiet through release delay + grace")
+    app.ctl("advance", 6)
+    check.eq([(r["kinds"], r["catchUp"]) for r in app.reminders()], [(["eye"], True)], "one catch-up")
+
+
+@scenario
+def brief_mic_blip_is_ignored(app, check):
+    """A 3-second microphone blip never counts as a call."""
+    app.ctl("advance", 10)
+    app.ctl("detect", "mic", "com.example.voice", "Voice Memos", "on")
+    app.ctl("advance", 3)
+    app.ctl("detect", "mic", "com.example.voice", "Voice Memos", "off")
+    s = app.ctl("advance", 30)
+    check.eq(app.events("detection"), [], "no detection change")
+    check.eq(s["suppression"], [], "nothing deferring")
+
+
+@scenario
+def mute_unmute_is_not_a_meeting_end(app, check):
+    """Short and long mutes (mic input stopping) don't produce a reminder mid-call."""
+    app.ctl("detect", "mic", *TEAMS, "on")
+    app.ctl("advance", 1300)
+    app.ctl("detect", "mic", *TEAMS, "off")      # muted 8s: within release delay
+    app.ctl("advance", 8)
+    app.ctl("detect", "mic", *TEAMS, "on")
+    app.ctl("advance", 30)
+    check.eq(len(app.events("detection")), 1, "short mute never cleared the evidence")
+    app.ctl("detect", "mic", *TEAMS, "off")      # muted 40s: evidence clears, grace starts
+    app.ctl("advance", 40)
+    app.ctl("detect", "mic", *TEAMS, "on")       # unmute re-confirms within grace
+    s = app.ctl("advance", 120)
+    check.eq(s["detection"]["active"], ["Microsoft Teams using microphone"], "call evidence back")
+    check.eq(s["remindersDelivered"], 0, "no reminder from mute/unmute")
+
+
+@scenario
+def dictation_and_ignored_apps_dont_defer(app, check):
+    """Dictation (ignored by default) and a user-ignored app don't defer reminders but are listed as seen."""
+    ignored = app.ctl("state")["settings"]["ignoredApps"] + ["com.example.recorder"]
+    app.ctl("settings", json.dumps({"ignoredApps": ignored}))
+    app.ctl("detect", "mic", "com.apple.CoreSpeech", "Dictation", "on")
+    app.ctl("detect", "mic", "com.example.recorder", "Recorder", "on")
+    s = app.ctl("advance", 1200)
+    check.eq(s["suppression"], [], "nothing deferring")
+    check.eq(s["remindersDelivered"], 1, "eye reminder delivered normally")
+    check.eq(sorted(s["detection"]["seenMicApps"]), ["com.apple.CoreSpeech", "com.example.recorder"], "seen apps listed for the ignore UI")
+
+
+@scenario
+def camera_only_silent_attendee(app, check):
+    """Camera on with the mic silent (attending quietly) still defers."""
+    app.ctl("detect", "camera", "on")
+    s = app.ctl("advance", 1300)
+    check.eq(s["suppression"], ["Camera in use"], "evidence")
+    check.eq(s["remindersDelivered"], 0, "no reminder")
+
+
+@scenario
+def mic_ends_but_camera_continues(app, check):
+    """One signal ending while another continues keeps deferring; all clearing gives one catch-up."""
+    app.ctl("detect", "mic", *TEAMS, "on")
+    app.ctl("detect", "camera", "on")
+    app.ctl("advance", 1300)
+    app.ctl("detect", "mic", *TEAMS, "off")
+    s = app.ctl("advance", 120)
+    check.eq(s["suppression"], ["Camera in use"], "camera still deferring")
+    check.eq(s["remindersDelivered"], 0, "no reminder")
+    app.ctl("detect", "camera", "off")
+    app.ctl("advance", 75)
+    check.eq(len(app.reminders()), 1, "one catch-up after both clear")
+
+
+@scenario
+def unattributed_microphone(app, check):
+    """Input running with no process to blame is still evidence, labelled honestly."""
+    app.ctl("detect", "mic-unattributed", "on")
+    check.eq(app.ctl("advance", 10)["detection"]["active"], ["Microphone in use"], "evidence label")
+
+
+@scenario
+def detection_can_be_turned_off(app, check):
+    """With both detectors off, mic and camera activity are ignored and the menu says so."""
+    app.ctl("settings", json.dumps({"detectMicrophone": False, "detectCamera": False}))
+    app.ctl("detect", "mic", *TEAMS, "on")
+    app.ctl("detect", "camera", "on")
+    s = app.ctl("advance", 1200)
+    check.eq(s["remindersDelivered"], 1, "reminder not deferred")
+    check.eq(s["detection"]["status"], "Meeting detection off", "detection status")
+
+
+@scenario
+def detection_failure_shows_uncertainty(app, check):
+    """Detector errors: status says unavailable, evidence is held for 5 minutes (not a fake meeting end), manual mode still works."""
+    app.ctl("detect", "mic", *TEAMS, "on")
+    app.ctl("advance", 600)
+    app.ctl("detect", "fail", "Core Audio error")
+    s = app.ctl("advance", 120)
+    check.eq(s["detection"]["available"], False, "unavailable")
+    check.eq(s["detection"]["status"], "Meeting detection unavailable", "detection status")
+    check.eq(s["detection"]["active"], ["Microsoft Teams using microphone"], "evidence held during failure")
+    s = app.ctl("advance", 200)
+    check.eq(s["detection"]["active"], [], "evidence released after the hold limit")
+    s = app.ctl("presentation", "on")
+    check.eq(s["suppression"], ["Presentation mode"], "manual Presentation mode still works")
+    app.ctl("detect", "ok")
+    s = app.ctl("advance", 10)
+    check.eq(len(app.events("detectionRestored")), 1, "recovery recorded")
+    check.eq(s["suppression"], ["Microsoft Teams using microphone", "Presentation mode"], "evidence back after recovery")
+
+
+@scenario
+def hardware_probe(app, check):
+    """The real Core Audio / CoreMediaIO detector works on this Mac and is cheap enough to poll every 2s."""
+    result = subprocess.run([str(BIN), "probe", "6"], capture_output=True, text=True, timeout=30)
+    probe = json.loads(result.stdout)
+    (app.dir / "probe.json").write_text(json.dumps(probe, indent=2))
+    check.eq(probe["available"], True, "detector available")
+    warm = sorted(probe["timingsMs"][1:])
+    check(warm[len(warm) // 2] < 25, "median warm read < 25ms", round(warm[len(warm) // 2], 2))
+    check(all(sig["kind"] in ("microphone", "camera") and sig["label"] for sig in probe["signals"]), "signals well-formed", probe["signals"])
+
+
 # ---------------------------------------------------------------------------
 
 

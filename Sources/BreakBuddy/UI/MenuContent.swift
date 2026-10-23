@@ -6,6 +6,7 @@ struct MenuContent: View {
 
     var body: some View {
         Text(model.statusText)
+        Text(model.detectionStatusText)
 
         Divider()
 
