@@ -78,8 +78,9 @@ unverified, so Presentation mode stays available. Check the real detector any ti
 
 ## App icon
 
-`design/icon/artwork.png` is full-bleed artwork (generated with Codex; the other candidates
-sit beside it). `scripts/make-icon.sh` applies the macOS icon grid, mask and shadow and
+`design/icon/artwork.png` is full-bleed artwork generated with Codex: resting eyes, chosen
+over a wide-open eye that felt like surveillance. Other candidates are in `design/icon/` and
+`design/icon/round-2/` (with `icon-options.png` comparing them). `scripts/make-icon.sh` applies the macOS icon grid, mask and shadow and
 writes `Resources/AppIcon.icns`, which `bundle.sh` copies into the app.
 
 ## Layout
