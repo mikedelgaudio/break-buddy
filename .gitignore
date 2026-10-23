@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+build/
+e2e/artifacts/
+__pycache__/
+.DS_Store
