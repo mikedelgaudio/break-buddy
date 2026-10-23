@@ -4,6 +4,33 @@ A meeting-aware break reminder for the macOS menu bar. Separate eye and movement
 breaks that come due during a meeting or presentation are held and offered as **one**
 catch-up break after the meeting ends and a short grace period passes.
 
+## Install on another Mac
+
+Requires macOS 15 or later; the DMG is universal (Apple silicon and Intel).
+
+**Easiest: download with `gh`** (no Gatekeeper prompt, because command-line downloads aren't quarantined):
+
+```bash
+gh release download --repo mikedelgaudio/break-buddy --pattern '*.dmg' --dir ~/Downloads
+```
+
+Open the DMG and drag **Break Buddy** onto **Applications**.
+
+**From the browser:** signed in to GitHub, open the repo → Releases → download the DMG, then drag
+to Applications. The app isn't notarized, so the first launch is blocked: open **System Settings →
+Privacy & Security**, scroll to *"Break Buddy" was blocked*, click **Open Anyway**. (Or run
+`xattr -dr com.apple.quarantine "/Applications/Break Buddy.app"`.)
+
+On a managed work Mac, unsigned apps may be blocked by policy — check before working around it.
+
+### Making a release
+
+```bash
+git tag v0.x.y && git push --tags
+scripts/make-dmg.sh                    # → build/BreakBuddy-0.x.y.dmg
+gh release create v0.x.y build/BreakBuddy-0.x.y.dmg --title "Break Buddy 0.x.y"
+```
+
 ## Build & run
 
 No Xcode project — SwiftPM plus a bundling script (Xcode's toolchain is still required).
