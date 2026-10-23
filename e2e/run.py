@@ -621,6 +621,61 @@ def hardware_probe(app, check):
     check(all(sig["kind"] in ("microphone", "camera") and sig["label"] for sig in probe["signals"]), "signals well-formed", probe["signals"])
 
 
+# --- Visual: menu bar stability, settings layout, app icon ------------------
+
+
+@scenario
+def menu_bar_width_is_stable(app, check):
+    """The menu-bar item keeps one width for the whole countdown and the whole break timer (no jank)."""
+    widths = {}
+    s = app.ctl("state")
+    for step in [60] * 19 + [10] * 5 + [1] * 9:   # 19m … 1m, then 50s … 10s, then 9s … 1s
+        s = app.ctl("advance", step)
+        if s["menuBar"][1]:
+            widths[s["menuBar"][1]] = s["menuBarWidth"]
+    app.ctl("render", "menubar", app.dir / "menubar-countdown.png")
+    check(len(widths) >= 20, "sampled many countdown values", sorted(widths))
+    check.eq(len(set(widths.values())), 1, "distinct widths during countdown")
+    app.ctl("credit", "both")
+    app.ctl("take", "move")  # 120s break
+    break_widths = {}
+    for _ in range(60):
+        s = app.ctl("advance", 2)
+        if s.get("activeBreak"):
+            break_widths[s["menuBar"][1]] = s["menuBarWidth"]
+    app.ctl("render", "menubar", app.dir / "menubar-break.png")
+    check(len(break_widths) >= 30, "sampled the break timer", len(break_widths))
+    check.eq(len(set(break_widths.values())), 1, "distinct widths during break")
+
+
+@scenario
+def settings_panes_are_wide_and_short(app, check):
+    """Each settings pane renders at 600pt wide and stays under 480pt tall, in light and dark mode."""
+    app.ctl("detect", "mic", *TEAMS, "on")
+    app.ctl("advance", 2)
+    for pane in ["breaks", "meetings", "schedule", "general"]:
+        for mode in ["light", "dark"]:
+            path = app.dir / f"settings-{pane}-{mode}.png"
+            s = app.ctl("render", "settings", pane, path, *(["dark"] if mode == "dark" else []))
+            width, height = s["renderSize"]
+            check(path.exists() and path.stat().st_size > 10_000, f"{pane}/{mode} rendered", path.name)
+            check.eq(width, 600, f"{pane}/{mode} width")
+            check(height < 480, f"{pane}/{mode} height < 480", height)
+
+
+@scenario
+def app_icon_is_bundled(app, check):
+    """The bundle declares and ships AppIcon.icns with a 1024px (512@2x) representation."""
+    plist = subprocess.run(["plutil", "-extract", "CFBundleIconFile", "raw", str(APP / "Contents" / "Info.plist")], capture_output=True, text=True)
+    check.eq(plist.stdout.strip(), "AppIcon", "CFBundleIconFile")
+    icns = APP / "Contents" / "Resources" / "AppIcon.icns"
+    check(icns.exists(), "AppIcon.icns in bundle", str(icns))
+    out = app.dir / "AppIcon.iconset"
+    subprocess.run(["iconutil", "-c", "iconset", str(icns), "-o", str(out)], check=True)
+    check((out / "icon_512x512@2x.png").exists(), "1024px representation", sorted(p.name for p in out.iterdir()))
+    subprocess.run(["cp", str(out / "icon_128x128@2x.png"), str(app.dir / "app-icon.png")], check=True)
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -658,6 +713,7 @@ def main():
             "seconds": round(time.time() - started, 2),
             "checks": check.checks,
             "reminders": app.reminders(),
+            "images": sorted(str(p.relative_to(run_dir)) for p in app.dir.glob("*.png")),
         })
         print(f"{'PASS' if error is None else 'FAIL'}  {fn.__name__}" + (f"\n      {error}" if error else ""))
 
@@ -690,6 +746,8 @@ def render_markdown(summary):
     for r in summary["results"]:
         lines += ["", f"## {r['scenario']}", "", r["description"], ""]
         lines += [f"- {'✅' if c['ok'] else '❌'} {c['check']}" + ("" if c["ok"] else f" — actual `{c['actual']!r}`") for c in r["checks"]]
+        if r.get("images"):
+            lines += [""] + [f"![{Path(i).stem}]({i})" for i in r["images"]]
         if r["error"] and not r["checks"] or (r["error"] and r["checks"][-1]["ok"]):
             lines += ["", "```", r["error"].strip(), "```"]
     return "\n".join(lines) + "\n"

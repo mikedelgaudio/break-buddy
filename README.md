@@ -31,7 +31,8 @@ over a distributed notification scoped to `BB_STATE_DIR`. Each run writes
 Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentation on|off [min]`,
 `signal <name> on|off`, `pause <min>|tomorrow`, `resume`, `lock`, `unlock`, `sleep`, `wake`,
 `displays-sleep`, `displays-wake`, `detect mic <bundleID> <name> on|off`, `detect mic-unattributed on|off`,
-`detect camera on|off`, `detect fail <message>`, `detect ok`, `take eye|move|both`, `end-break`,
+`detect camera on|off`, `detect fail <message>`, `detect ok`,
+`render menubar <png>`, `render settings breaks|meetings|schedule|general <png> [dark]`, `take eye|move|both`, `end-break`,
 `credit eye|move|both|due`, `snooze`, `settings '<json patch>'`, `state`, `quit`.
 
 ## Time-away and restart policy
@@ -75,6 +76,12 @@ unverified, so Presentation mode stays available. Check the real detector any ti
 "build/Break Buddy.app/Contents/MacOS/BreakBuddy" probe --watch    # timestamped change log
 ```
 
+## App icon
+
+`design/icon/artwork.png` is full-bleed artwork (generated with Codex; the other candidates
+sit beside it). `scripts/make-icon.sh` applies the macOS icon grid, mask and shadow and
+writes `Resources/AppIcon.icns`, which `bundle.sh` copies into the app.
+
 ## Layout
 
 | Path | Responsibility |
@@ -90,7 +97,8 @@ unverified, so Presentation mode stays available. Check the real detector any ti
 | `System/SystemEvents.swift` | Sleep, display sleep, screen lock, user switching |
 | `Reminders/NotificationSink.swift` | Native notifications with Start / Snooze / Already took a break |
 | `Control/TestControl.swift` | Test mode and the `ctl` client |
-| `UI/` | Menu and settings window |
+| `UI/MenuBarIcon.swift` | Fixed-width menu-bar label image (no jank as the countdown ticks) |
+| `UI/` | Menu and tabbed settings window |
 
 ## Roadmap
 

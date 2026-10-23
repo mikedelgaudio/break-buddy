@@ -36,12 +36,7 @@ private struct MenuBarLabel: View {
     let model: AppModel
 
     var body: some View {
-        let text = model.menuBarText
-        if text.isEmpty {
-            Image(systemName: model.menuBarSymbol)
-        } else {
-            Label(text, systemImage: model.menuBarSymbol).labelStyle(.titleAndIcon)
-        }
+        Image(nsImage: MenuBarIcon.image(symbol: model.menuBarSymbol, text: model.menuBarText))
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// E2E test mode, enabled only by `BB_TEST_MODE=1`. The clock becomes manual, reminders are
 /// recorded instead of posted, and the app obeys `BreakBuddy ctl …` commands sent as
@@ -42,6 +43,7 @@ final class TestControl: ReminderSink {
     private let config: TestConfig
     private var observer: NSObjectProtocol?
     let detector = FakeDetector()
+    private var lastRenderSize: [CGFloat]?
 
     init(model: AppModel, config: TestConfig) {
         self.model = model
@@ -142,6 +144,25 @@ final class TestControl: ReminderSink {
             case "ok": detector.error = nil
             default: throw CommandError(message: "unknown detect target \(args[0])")
             }
+        case "render":
+            // render menubar <path> · render settings <breaks|meetings|schedule|general> <path> [dark]
+            switch try arg(0) {
+            case "menubar":
+                Renderer.writeMenuBar(MenuBarIcon.image(symbol: model.menuBarSymbol, text: model.menuBarText), to: URL(filePath: try arg(1)))
+            case "settings":
+                let pane: AnyView
+                switch try arg(1) {
+                case "breaks": pane = AnyView(BreaksPane(model: model))
+                case "meetings": pane = AnyView(MeetingsPane(model: model))
+                case "schedule": pane = AnyView(SchedulePane(model: model))
+                case "general": pane = AnyView(GeneralPane(model: model))
+                default: throw CommandError(message: "unknown settings pane \(args[1])")
+                }
+                let size = Renderer.writeView(pane.frame(width: SettingsLayout.width), to: URL(filePath: try arg(2)), dark: args.count > 3 && args[3] == "dark")
+                lastRenderSize = [size.width, size.height]
+            default:
+                throw CommandError(message: "unknown render target \(args[0])")
+            }
         case "lock": model.awayBegan(.locked)
         case "unlock": model.awayEnded(.locked)
         case "sleep": model.awayBegan(.asleep)
@@ -189,6 +210,8 @@ final class TestControl: ReminderSink {
             "t": elapsed,
             "status": m.statusText,
             "menuBar": [m.menuBarSymbol, m.menuBarText],
+            "menuBarWidth": MenuBarIcon.image(symbol: m.menuBarSymbol, text: m.menuBarText).size.width,
+            "renderSize": lastRenderSize ?? [],
             "worked": Dictionary(uniqueKeysWithValues: BreakKind.allCases.map { ($0.rawValue, m.scheduler.workedSeconds($0)) }),
             "due": m.due.sorted().map(\.rawValue),
             "suppression": m.suppressionReasons.map(\.label),
@@ -257,5 +280,44 @@ enum ControlClient {
         }
         FileHandle.standardError.write(Data("ctl: no acknowledgement for '\(cmd)' within 15s\n".utf8))
         return 3
+    }
+}
+
+/// Offscreen rendering for visual E2E checks. Uses an NSHostingView in a borderless window and
+/// `cacheDisplay`, so real AppKit controls draw and no screen-recording permission is needed.
+enum Renderer {
+    static func writeView<V: View>(_ view: V, to url: URL, dark: Bool) -> CGSize {
+        let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        host.frame.size = host.fittingSize
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        host.frame.size = host.fittingSize
+        write(host, to: url)
+        return host.bounds.size
+    }
+
+    /// Draws the template image the way the menu bar would (dark glyph on a light bar), 3x.
+    static func writeMenuBar(_ image: NSImage, to url: URL) {
+        let scale: CGFloat = 3, padding: CGFloat = 6
+        let size = NSSize(width: (image.size.width + padding * 2) * scale, height: (image.size.height + padding * 2) * scale)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor(white: 0.93, alpha: 1).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor(red: 1, green: 0.3, blue: 0.3, alpha: 0.35).setStroke()
+        NSRect(x: padding * scale, y: padding * scale, width: image.size.width * scale, height: image.size.height * scale).frame()
+        image.draw(in: NSRect(x: padding * scale, y: padding * scale, width: image.size.width * scale, height: image.size.height * scale))
+        NSGraphicsContext.restoreGraphicsState()
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+
+    private static func write(_ view: NSView, to url: URL) {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 }
