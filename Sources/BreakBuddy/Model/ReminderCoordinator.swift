@@ -33,6 +33,8 @@ struct ReminderCoordinator {
         if let grace = graceEndsAt {
             guard now >= grace else { return nil }
             graceEndsAt = nil
+            // Anything reminded before the meeting or time away was likely missed: offer again.
+            lastRemindedAt = nil
         }
         guard !due.isEmpty else {
             lastRemindedAt = nil

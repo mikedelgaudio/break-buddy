@@ -43,6 +43,7 @@ final class TestControl: ReminderSink {
     private let config: TestConfig
     private var observer: NSObjectProtocol?
     let detector = FakeDetector()
+    let input = FakeInputMonitor()
     private var lastRenderSize: [CGFloat]?
 
     init(model: AppModel, config: TestConfig) {
@@ -163,6 +164,14 @@ final class TestControl: ReminderSink {
             default:
                 throw CommandError(message: "unknown render target \(args[0])")
             }
+        case "input":
+            // input human (keyboard/mouse now) · input agent (synthetic activity; not you) · input present (always active)
+            switch try arg(0) {
+            case "human": input.lastHumanInput = clock.now
+            case "agent": record("agentActivity", [:])
+            case "present": input.lastHumanInput = nil
+            default: throw CommandError(message: "unknown input kind \(args[0])")
+            }
         case "lock": model.awayBegan(.locked)
         case "unlock": model.awayEnded(.locked)
         case "sleep": model.awayBegan(.asleep)
@@ -216,6 +225,7 @@ final class TestControl: ReminderSink {
             "due": m.due.sorted().map(\.rawValue),
             "suppression": m.suppressionReasons.map(\.label),
             "away": m.awayReasons.sorted().map(\.label),
+            "humanIdle": input.secondsSinceHumanInput(now: clock.now),
             "detection": [
                 "status": m.detectionStatusText,
                 "available": m.detectionError == nil,

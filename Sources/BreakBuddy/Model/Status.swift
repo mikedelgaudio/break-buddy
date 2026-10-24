@@ -25,6 +25,7 @@ extension AppModel {
     }
 
     var menuBarSymbol: String {
+        if awayReasons == [.idle] { return "zzz" }
         if isAway { return "lock" }
         if activeBreak != nil { return "cup.and.saucer" }
         if pausedUntil != nil { return "pause.circle" }

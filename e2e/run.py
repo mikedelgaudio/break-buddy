@@ -621,6 +621,85 @@ def hardware_probe(app, check):
     check(all(sig["kind"] in ("microphone", "camera") and sig["label"] for sig in probe["signals"]), "signals well-formed", probe["signals"])
 
 
+# --- Presence: your input vs agents (fake input monitor) ------------------------
+# By default the fake reports you as always active. `input human` records a keyboard/mouse
+# event now; `input agent` is activity that doesn't touch the hardware idle clock.
+
+
+@scenario
+def agent_activity_is_not_you(app, check):
+    """Agents keeping the Mac busy don't count as you: after 5 min without your input you're away, idle work is refunded, and coming back credits the break."""
+    app.ctl("advance", 600)
+    app.ctl("input", "human")
+    for _ in range(10):
+        app.ctl("input", "agent")
+        app.ctl("advance", 30)
+    s = app.ctl("state")
+    check.eq(s["away"], ["No input from you"], "away after 5 min without your input")
+    check.eq(s["status"], "Away · No input from you", "status")
+    check.eq(s["worked"]["eye"], 600, "the 5 idle minutes are refunded")
+    check.eq(len(app.events("agentActivity")), 10, "agent activity happened throughout")
+    s = app.ctl("advance", 300)
+    check.eq(s["worked"]["eye"], 600, "no work time while away")
+    check.eq(s["remindersDelivered"], 0, "no reminder to an empty chair")
+    app.ctl("input", "human")
+    s = app.ctl("advance", 1)
+    returned = app.events("returned")
+    check.eq([r["credited"] for r in returned], [["eye", "move"]], "time away credited")
+    check.between(returned[0]["seconds"], 600, 602, "away time measured from your last input")
+    check.eq(s["worked"], {"eye": 0, "move": 0}, "timers restart")
+
+
+@scenario
+def watching_a_meeting_without_input_still_counts(app, check):
+    """No input during a call means watching, not away: work time keeps counting and reminders stay deferred."""
+    app.ctl("input", "human")
+    app.ctl("detect", "mic", *TEAMS, "on")
+    s = app.ctl("advance", 1300)
+    check.eq(s["away"], [], "not away during the meeting")
+    check.between(s["worked"]["eye"], 1299, 1300, "meeting time counts as screen time")
+    check.eq(s["remindersDelivered"], 0, "reminder deferred")
+
+
+@scenario
+def short_pause_is_not_away(app, check):
+    """Reading for 4 minutes without touching anything doesn't count as stepping away."""
+    app.ctl("input", "human")
+    app.ctl("advance", 240)
+    app.ctl("input", "human")
+    s = app.ctl("advance", 240)
+    check.eq(app.events("awayBegan"), [], "never away")
+    check.eq(s["worked"]["eye"], 480, "all of it counted as work")
+
+
+@scenario
+def return_from_idle_waits_before_reminding(app, check):
+    """With away-credit off, an overdue break waits out the grace countdown after you come back."""
+    app.ctl("settings", json.dumps({"creditTimeAway": False, "snoozeMinutes": 30}))
+    app.ctl("advance", 1300)
+    app.ctl("input", "human")
+    s = app.ctl("advance", 300)
+    check.eq(s["away"], ["No input from you"], "away")
+    check.eq(s["worked"]["eye"], 1300, "idle stretch refunded")
+    app.ctl("advance", 600)
+    app.ctl("input", "human")
+    s = app.ctl("advance", 1)
+    check.eq(s["due"], ["eye"], "eye still overdue (no credit)")
+    check.eq(app.ctl("advance", 58)["remindersDelivered"], 1, "no reminder right after you return")
+    app.ctl("advance", 2)
+    after = app.reminders()[1:]
+    check.eq([(r["kinds"], r["catchUp"]) for r in after], [(["eye"], False)], "one reminder after the countdown")
+
+
+@scenario
+def idle_threshold_is_configurable(app, check):
+    """The away-after setting is respected (2 minutes here)."""
+    app.ctl("settings", json.dumps({"idleMinutes": 2}))
+    app.ctl("input", "human")
+    check.eq(app.ctl("advance", 119)["away"], [], "present at 1:59")
+    check.eq(app.ctl("advance", 1)["away"], ["No input from you"], "away at 2:00")
+
+
 # --- Visual: menu bar stability, settings layout, app icon ------------------
 
 

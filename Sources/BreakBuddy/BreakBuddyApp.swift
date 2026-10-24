@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.control = control
             sink = control
             model.detector = control.detector
+            model.inputMonitor = control.input
         } else {
             let support = URL.applicationSupportDirectory.appending(path: "BreakBuddy")
             model = AppModel(clock: SystemClock(),
@@ -65,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             super.init()
             sink = NotificationSink(model: model)
             model.detector = CoreAudioDetector()
+            model.inputMonitor = HardwareInputMonitor()
         }
         model.sink = sink
     }

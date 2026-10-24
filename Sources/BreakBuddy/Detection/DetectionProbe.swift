@@ -18,6 +18,8 @@ enum DetectionProbe {
             "error": reading.error as Any? ?? NSNull(),
             "signals": reading.signals.sorted().map { ["kind": $0.kind.rawValue, "appID": $0.appID as Any? ?? NSNull(), "appName": $0.appName as Any? ?? NSNull(), "label": $0.label] },
             "timingsMs": timings,
+            "hardwareIdleSeconds": HardwareInputMonitor().secondsSinceHumanInput(now: Date()),
+            "allInputIdleSeconds": HardwareInputMonitor.secondsSinceAnyInput(),
         ]
         let data = try! JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
         FileHandle.standardOutput.write(data + Data("\n".utf8))
@@ -34,6 +36,7 @@ enum DetectionProbe {
         var lastSignals: Set<ActivitySignal> = []
         var lastError: String?
         var lastOutput: Set<String> = []
+        var lastActive = true
         var first = true
         func emit(_ text: String) { FileHandle.standardOutput.write(Data("\(clock.string(from: Date()))  \(text)\n".utf8)) }
 
@@ -41,6 +44,12 @@ enum DetectionProbe {
         while true {
             let reading = detector.read()
             let output = detector.audioOutputApps()
+            let hardwareIdle = HardwareInputMonitor().secondsSinceHumanInput(now: Date())
+            let active = hardwareIdle < 60
+            if active != lastActive {
+                emit(String(format: "you: %@ (hardware idle %.0fs, all-input idle %.0fs)", active ? "active" : "no input for 60s+", hardwareIdle, HardwareInputMonitor.secondsSinceAnyInput()))
+                lastActive = active
+            }
             if first || reading.signals != lastSignals || reading.error != lastError || output != lastOutput {
                 var changes: [String] = []
                 changes += reading.signals.subtracting(lastSignals).sorted().map { "+ \($0.label)" }

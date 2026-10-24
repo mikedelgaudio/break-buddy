@@ -58,15 +58,23 @@ over a distributed notification scoped to `BB_STATE_DIR`. Each run writes
 Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentation on|off [min]`,
 `signal <name> on|off`, `pause <min>|tomorrow`, `resume`, `lock`, `unlock`, `sleep`, `wake`,
 `displays-sleep`, `displays-wake`, `detect mic <bundleID> <name> on|off`, `detect mic-unattributed on|off`,
-`detect camera on|off`, `detect fail <message>`, `detect ok`,
+`detect camera on|off`, `detect fail <message>`, `detect ok`, `input human|agent|present`,
 `render menubar <png>`, `render settings breaks|meetings|schedule|general <png> [dark]`, `take eye|move|both`, `end-break`,
 `credit eye|move|both|due`, `snooze`, `settings '<json patch>'`, `state`, `quit`.
 
 ## Time-away and restart policy
 
 - **Work time** only accumulates during working hours while not paused, on a break, locked,
-  asleep, displays asleep, or switched to another user. Meetings still count as work.
-- **Returning from lock/sleep** credits each break type whose duration the time away covered
+  asleep, displays asleep, switched to another user, or idle. Meetings still count as work.
+- **You vs. agents**: presence comes from the HID system's idle time — physical keyboard,
+  mouse and trackpad only. Agents that keep the Mac awake and busy without posting input
+  (terminals, builds, in-page browser automation) don't count as you. After 5 minutes
+  (configurable) without your input you're away; the away time is backdated to your last
+  input and the work counted in between is refunded. During a meeting or presentation, no
+  input means watching, so it never counts as away. Caveat: tools that post synthetic HID
+  events with Accessibility permission (computer-use agents, mouse jigglers) may still look
+  like you.
+- **Returning from lock/sleep/idle** credits each break type whose duration the time away covered
   (20s+ → eye, 2m+ → movement with defaults). Toggle: *Count locked or asleep time as a break*.
   Idle keyboard/mouse is never treated as a break. Returning gets the same grace period as a
   meeting ending, so an overdue break isn't announced the instant you unlock.

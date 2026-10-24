@@ -12,6 +12,11 @@ struct BreakScheduler {
         worked = saved
     }
 
+    /// Takes back work time that turned out to be idle.
+    mutating func refund(_ seconds: TimeInterval) {
+        for kind in BreakKind.allCases { worked[kind] = max(0, workedSeconds(kind) - seconds) }
+    }
+
     mutating func reset(_ kinds: Set<BreakKind>) {
         for kind in kinds { worked[kind] = 0 }
     }

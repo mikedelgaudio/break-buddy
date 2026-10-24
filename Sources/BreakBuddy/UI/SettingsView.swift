@@ -93,8 +93,15 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Stepping away") {
-                Toggle("Count time locked or asleep as a break", isOn: s.binding(\.creditTimeAway))
+            Section {
+                s.presets("Away after no input for", \.idleMinutes, [2, 3, 5, 10, 15], label: SettingsBindings.minutes)
+                Toggle("Count time away as a break", isOn: s.binding(\.creditTimeAway))
+            } header: {
+                Text("Stepping away")
+            } footer: {
+                Text("Only your keyboard, mouse and trackpad count; agents working on their own don't. Locked, asleep and idle time all count as away, except during meetings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

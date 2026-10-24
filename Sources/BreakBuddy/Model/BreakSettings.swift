@@ -20,8 +20,10 @@ struct BreakSettings: Codable, Equatable {
     var workDays: Set<Int> = [2, 3, 4, 5, 6]
     var workStartMinutes = 9 * 60
     var workEndMinutes = 18 * 60
-    /// Time locked or asleep credits each break type whose duration it covers.
+    /// Time away (locked, asleep or idle) credits each break type whose duration it covers.
     var creditTimeAway = true
+    /// No keyboard/mouse input from the person for this long (outside meetings) counts as away.
+    var idleMinutes: Double = 5
     var detectMicrophone = true
     var detectCamera = true
     /// Bundle IDs whose microphone use never counts as a call (dictation, Siri, sound recognition…).

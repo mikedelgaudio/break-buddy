@@ -8,10 +8,11 @@ struct ActiveBreak: Equatable {
 
 /// Reasons the user is known to be away from the screen. Work time stops while any is active.
 enum AwayReason: String, CaseIterable, Comparable {
-    case locked, asleep, displaysAsleep, switchedOut
+    case locked, asleep, displaysAsleep, switchedOut, idle
 
     var label: String {
         switch self {
+        case .idle: "No input from you"
         case .locked: "Screen locked"
         case .asleep: "Asleep"
         case .displaysAsleep: "Displays asleep"
@@ -68,6 +69,9 @@ final class AppModel {
     @ObservationIgnored private let snapshots: SnapshotStore
     @ObservationIgnored weak var sink: ReminderSink?
     @ObservationIgnored var detector: ActivityDetector?
+    @ObservationIgnored var inputMonitor: InputMonitor?
+    /// Work counted since the person's last input; refunded if that stretch turns out to be idle.
+    @ObservationIgnored private var workSinceInput: TimeInterval = 0
     @ObservationIgnored private var lastPoll = Date.distantPast
     @ObservationIgnored private var lastGoodReading: Date?
     @ObservationIgnored private var firstSeen: [ActivitySignal: Date] = [:]
@@ -140,9 +144,11 @@ final class AppModel {
             if current >= active.endsAt { finishBreak(active) }
             return
         }
-        guard pausedUntil == nil, !isAway, isWorkingTime else { return }
+        let working = pausedUntil == nil && !isAway && isWorkingTime
+        if working { scheduler.accumulate(elapsed) }
+        checkIdle(accumulated: working ? elapsed : 0)
+        guard working, !isAway else { return }
 
-        scheduler.accumulate(elapsed)
         let due = self.due
         let suppressed = isSuppressed
         if suppressed && !due.isEmpty { deferredWhileDue = true }
@@ -203,11 +209,33 @@ final class AppModel {
         }
     }
 
-    // MARK: Away (lock, sleep)
+    // MARK: Idle (no input from the person)
 
-    func awayBegan(_ reason: AwayReason) {
+    /// Hardware input stopping for `idleMinutes` means the person stepped away, even if agents
+    /// keep the Mac awake. Away time is backdated to the last input and the work counted in
+    /// between is refunded. In a meeting or presentation, no input just means watching.
+    private func checkIdle(accumulated: TimeInterval) {
+        guard let inputMonitor else { return }
+        let idle = inputMonitor.secondsSinceHumanInput(now: now)
+        // Work since the last input can't exceed the time since the last input.
+        workSinceInput = min(workSinceInput + accumulated, idle)
+
+        let threshold = settings.idleMinutes * 60
+        let inMeeting = !suppressionReasons.isEmpty
+        if awayReasons.contains(.idle) {
+            if idle < threshold || inMeeting { awayEnded(.idle) }
+        } else if idle >= threshold, !inMeeting, !isAway {
+            scheduler.refund(workSinceInput)
+            workSinceInput = 0
+            awayBegan(.idle, since: now.addingTimeInterval(-idle))
+        }
+    }
+
+    // MARK: Away (lock, sleep, idle)
+
+    func awayBegan(_ reason: AwayReason, since: Date? = nil) {
         guard !awayReasons.contains(reason) else { return }
-        if awayReasons.isEmpty { awaySince = now }
+        if awayReasons.isEmpty { awaySince = since ?? now }
         awayReasons.insert(reason)
         suppressionChanged()
         emit("awayBegan", ["reason": reason.rawValue])
