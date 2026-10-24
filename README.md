@@ -25,11 +25,16 @@ On a managed work Mac, unsigned apps may be blocked by policy — check before w
 
 ### Making a release
 
+GitHub Actions does it ([.github/workflows/release.yml](.github/workflows/release.yml)): it runs the
+full E2E suite on a macOS runner and, only if every scenario passes, builds the universal DMG,
+tags the commit and publishes the release. The E2E report is attached to each run.
+
 ```bash
-git tag v0.x.y && git push --tags
-scripts/make-dmg.sh                    # → build/BreakBuddy-0.x.y.dmg
-gh release create v0.x.y build/BreakBuddy-0.x.y.dmg --title "Break Buddy 0.x.y"
+gh workflow run release.yml -f bump=patch           # or minor / major; also a button in the Actions tab
+gh workflow run release.yml -f bump=patch -f dry_run=true   # build + test only, DMG as a run artifact
 ```
+
+Pushing a `v*` tag yourself also triggers it. Locally, `scripts/make-dmg.sh` builds the same DMG.
 
 ## Build & run
 

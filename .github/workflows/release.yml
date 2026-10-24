@@ -1,0 +1,94 @@
+name: Release
+
+# Run from the Actions tab ("Run workflow", pick a bump) or push a v* tag yourself.
+# Runs the full E2E suite first; the tag and release are only created if it passes.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: Dry run (build and test, don't publish)
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE"
+          echo "Using $XCODE"
+          swift --version
+
+      - name: Decide version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            LATEST="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+            IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+            case "${{ inputs.bump }}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              *)     PATCH=$((PATCH + 1)) ;;
+            esac
+            TAG="v$MAJOR.$MINOR.$PATCH"
+            # Local only for now: bundle.sh reads the version from it. Pushed with the release.
+            git tag "$TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG"
+
+      - name: E2E suite
+        run: python3 e2e/run.py
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-${{ steps.version.outputs.tag }}
+          path: e2e/artifacts/
+          if-no-files-found: ignore
+
+      - name: Build DMG
+        id: dmg
+        run: echo "path=$(scripts/make-dmg.sh | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG (dry run)
+        if: inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ steps.version.outputs.tag }}
+          path: ${{ steps.dmg.outputs.path }}
+
+      - name: Publish release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.dmg.outputs.path }}" \
+            --target "$GITHUB_SHA" \
+            --title "Break Buddy ${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            --notes "**Install** (macOS 15+, Apple silicon or Intel): \`gh release download ${{ steps.version.outputs.tag }} --repo ${{ github.repository }} --pattern '*.dmg' --dir ~/Downloads\`, open the DMG, drag Break Buddy to Applications."
