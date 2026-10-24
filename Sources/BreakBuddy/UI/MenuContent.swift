@@ -7,6 +7,9 @@ struct MenuContent: View {
     var body: some View {
         Text(model.statusText)
         Text(model.detectionStatusText)
+        if !model.watchingApps.isEmpty {
+            Text("Video playing in \(model.watchingApps.joined(separator: ", ")) · counts as screen time")
+        }
 
         Divider()
 

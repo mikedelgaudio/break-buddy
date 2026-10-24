@@ -46,6 +46,8 @@ final class AppModel {
     static let onsetDelay: TimeInterval = 5
     static let releaseDelay: TimeInterval = 10
     static let holdOnFailure: TimeInterval = 5 * 60
+    /// Keep-awake utilities hold display assertions too; they don't mean anyone is watching.
+    static let keepAwakeTools: Set<String> = ["caffeinate", "Amphetamine", "KeepingYouAwake", "Caffeine", "Lungo", "Theine"]
 
     private(set) var settings: BreakSettings
     private(set) var now: Date
@@ -63,6 +65,8 @@ final class AppModel {
     private(set) var detectionError: String?
     /// Apps seen using the microphone this session (bundle ID → name), for the ignore list UI.
     private(set) var seenMicApps: [String: String] = [:]
+    /// Apps playing video (holding the display awake): screen time even without input.
+    private(set) var watchingApps: [String] = []
 
     @ObservationIgnored let clock: AppClock
     @ObservationIgnored private let store: SettingsStore
@@ -70,6 +74,9 @@ final class AppModel {
     @ObservationIgnored weak var sink: ReminderSink?
     @ObservationIgnored var detector: ActivityDetector?
     @ObservationIgnored var inputMonitor: InputMonitor?
+    @ObservationIgnored var videoMonitor: VideoMonitor?
+    /// Last moment a meeting or video vouched for the person being at the screen.
+    @ObservationIgnored private var lastPresenceHold = Date.distantPast
     /// Work counted since the person's last input; refunded if that stretch turns out to be idle.
     @ObservationIgnored private var workSinceInput: TimeInterval = 0
     @ObservationIgnored private var lastPoll = Date.distantPast
@@ -163,9 +170,16 @@ final class AppModel {
     // MARK: Detection
 
     private func pollDetection() {
-        guard let detector, now.timeIntervalSince(lastPoll) >= Self.pollInterval else { return }
+        guard now.timeIntervalSince(lastPoll) >= Self.pollInterval else { return }
         lastPoll = now
-        ingest(detector.read())
+        if let detector { ingest(detector.read()) }
+        if let videoMonitor {
+            let apps = Array(Set(videoMonitor.displaySleepHolders()).subtracting(Self.keepAwakeTools)).sorted()
+            if apps != watchingApps {
+                watchingApps = apps
+                emit("watching", ["apps": apps])
+            }
+        }
     }
 
     /// Debounces raw readings into evidence. A signal must be seen across `onsetDelay` to
@@ -212,19 +226,20 @@ final class AppModel {
     // MARK: Idle (no input from the person)
 
     /// Hardware input stopping for `idleMinutes` means the person stepped away, even if agents
-    /// keep the Mac awake. Away time is backdated to the last input and the work counted in
-    /// between is refunded. In a meeting or presentation, no input just means watching.
+    /// keep the Mac awake. During a meeting, presentation or video, no input just means
+    /// watching, so idle is measured from whichever came last: input or the end of that.
+    /// Away time is backdated to that moment and the work counted since is refunded.
     private func checkIdle(accumulated: TimeInterval) {
         guard let inputMonitor else { return }
-        let idle = inputMonitor.secondsSinceHumanInput(now: now)
-        // Work since the last input can't exceed the time since the last input.
+        if !suppressionReasons.isEmpty || !watchingApps.isEmpty { lastPresenceHold = now }
+        let idle = min(inputMonitor.secondsSinceHumanInput(now: now), max(0, now.timeIntervalSince(lastPresenceHold)))
+        // Work since the last sign of presence can't exceed the time since it.
         workSinceInput = min(workSinceInput + accumulated, idle)
 
         let threshold = settings.idleMinutes * 60
-        let inMeeting = !suppressionReasons.isEmpty
         if awayReasons.contains(.idle) {
-            if idle < threshold || inMeeting { awayEnded(.idle) }
-        } else if idle >= threshold, !inMeeting, !isAway {
+            if idle < threshold { awayEnded(.idle) }
+        } else if idle >= threshold, !isAway {
             scheduler.refund(workSinceInput)
             workSinceInput = 0
             awayBegan(.idle, since: now.addingTimeInterval(-idle))

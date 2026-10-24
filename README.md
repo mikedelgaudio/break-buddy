@@ -25,9 +25,12 @@ On a managed work Mac, unsigned apps may be blocked by policy — check before w
 
 ### Making a release
 
-GitHub Actions does it ([.github/workflows/release.yml](.github/workflows/release.yml)): it runs the
-full E2E suite on a macOS runner and, only if every scenario passes, builds the universal DMG,
-tags the commit and publishes the release. The E2E report is attached to each run.
+Automatic: every push to `main` that touches the app (not just `*.md`, `docs/` or `design/`)
+releases a **minor** bump via GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)).
+It runs the full E2E suite on a macOS runner and, only if every scenario passes, builds the
+universal DMG, tags the commit and publishes the release. The E2E report is attached to each run.
+
+Manual runs pick their own bump:
 
 ```bash
 gh workflow run release.yml -f bump=patch           # or minor / major; also a button in the Actions tab
@@ -73,10 +76,15 @@ Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentati
   asleep, displays asleep, switched to another user, or idle. Meetings still count as work.
 - **You vs. agents**: presence comes from the HID system's idle time — physical keyboard,
   mouse and trackpad only. Agents that keep the Mac awake and busy without posting input
-  (terminals, builds, in-page browser automation) don't count as you. After 5 minutes
-  (configurable) without your input you're away; the away time is backdated to your last
-  input and the work counted in between is refunded. During a meeting or presentation, no
-  input means watching, so it never counts as away. Caveat: tools that post synthetic HID
+  (terminals, builds, in-page browser automation) don't count as you. After 3 minutes
+  (configurable) without your input you're away — long enough that getting a drink counts as
+  a natural break. The away time is backdated to your last input and the work counted in
+  between is refunded.
+- **Watching counts as screen time**: during a meeting or presentation, or while an app keeps
+  the display awake for video (Chrome's "Video Wake Lock", Safari, QuickTime — read from power
+  assertions, no permission), no input means watching, never away. Idle is then measured from
+  the end of the video or meeting. Agents' keep-awake uses system-sleep assertions and
+  `caffeinate`-style tools are ignored, so neither looks like watching. Caveat: tools that post synthetic HID
   events with Accessibility permission (computer-use agents, mouse jigglers) may still look
   like you.
 - **Returning from lock/sleep/idle** credits each break type whose duration the time away covered

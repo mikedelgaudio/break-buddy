@@ -20,6 +20,7 @@ enum DetectionProbe {
             "timingsMs": timings,
             "hardwareIdleSeconds": HardwareInputMonitor().secondsSinceHumanInput(now: Date()),
             "allInputIdleSeconds": HardwareInputMonitor.secondsSinceAnyInput(),
+            "displaySleepHolders": PowerAssertionVideoMonitor().displaySleepHolders(),
         ]
         let data = try! JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
         FileHandle.standardOutput.write(data + Data("\n".utf8))
@@ -37,6 +38,7 @@ enum DetectionProbe {
         var lastError: String?
         var lastOutput: Set<String> = []
         var lastActive = true
+        var lastVideo: [String] = []
         var first = true
         func emit(_ text: String) { FileHandle.standardOutput.write(Data("\(clock.string(from: Date()))  \(text)\n".utf8)) }
 
@@ -46,6 +48,11 @@ enum DetectionProbe {
             let output = detector.audioOutputApps()
             let hardwareIdle = HardwareInputMonitor().secondsSinceHumanInput(now: Date())
             let active = hardwareIdle < 60
+            let video = PowerAssertionVideoMonitor().displaySleepHolders()
+            if video != lastVideo {
+                emit("display kept awake by: \(video.isEmpty ? "none" : video.joined(separator: ", "))")
+                lastVideo = video
+            }
             if active != lastActive {
                 emit(String(format: "you: %@ (hardware idle %.0fs, all-input idle %.0fs)", active ? "active" : "no input for 60s+", hardwareIdle, HardwareInputMonitor.secondsSinceAnyInput()))
                 lastActive = active

@@ -99,7 +99,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Stepping away")
             } footer: {
-                Text("Only your keyboard, mouse and trackpad count; agents working on their own don't. Locked, asleep and idle time all count as away, except during meetings.")
+                Text("Only your keyboard, mouse and trackpad count; agents working on their own don't. Watching a video or a meeting counts as screen time. Locked, asleep and idle time count as away.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

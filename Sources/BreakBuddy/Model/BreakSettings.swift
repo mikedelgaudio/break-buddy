@@ -22,8 +22,9 @@ struct BreakSettings: Codable, Equatable {
     var workEndMinutes = 18 * 60
     /// Time away (locked, asleep or idle) credits each break type whose duration it covers.
     var creditTimeAway = true
-    /// No keyboard/mouse input from the person for this long (outside meetings) counts as away.
-    var idleMinutes: Double = 5
+    /// No keyboard/mouse input from the person for this long (outside meetings and video) counts
+    /// as away, so a trip for a drink registers as a natural break.
+    var idleMinutes: Double = 3
     var detectMicrophone = true
     var detectCamera = true
     /// Bundle IDs whose microphone use never counts as a call (dictation, Siri, sound recognition…).

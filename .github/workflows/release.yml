@@ -1,21 +1,28 @@
 name: Release
 
-# Run from the Actions tab ("Run workflow", pick a bump) or push a v* tag yourself.
+# Every push to main that touches the app releases a minor bump (v0.3.0 → v0.4.0).
+# Also runs from the Actions tab ("Run workflow", pick a bump) or on a pushed v* tag.
 # Runs the full E2E suite first; the tag and release are only created if it passes.
+# Tags created by the release use GITHUB_TOKEN, so they don't re-trigger this workflow.
 on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "design/**"
   workflow_dispatch:
     inputs:
       bump:
         description: Version bump
         type: choice
         options: [patch, minor, major]
-        default: patch
+        default: minor
       dry_run:
         description: Dry run (build and test, don't publish)
         type: boolean
         default: false
-  push:
-    tags: ["v*"]
 
 permissions:
   contents: write
@@ -48,7 +55,7 @@ jobs:
           else
             LATEST="$(git tag --list 'v*' --sort=-v:refname | head -1)"
             IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
-            case "${{ inputs.bump }}" in
+            case "${{ inputs.bump || 'minor' }}" in
               major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
               minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
               *)     PATCH=$((PATCH + 1)) ;;

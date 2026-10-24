@@ -44,6 +44,7 @@ final class TestControl: ReminderSink {
     private var observer: NSObjectProtocol?
     let detector = FakeDetector()
     let input = FakeInputMonitor()
+    let video = FakeVideoMonitor()
     private var lastRenderSize: [CGFloat]?
 
     init(model: AppModel, config: TestConfig) {
@@ -172,6 +173,9 @@ final class TestControl: ReminderSink {
             case "present": input.lastHumanInput = nil
             default: throw CommandError(message: "unknown input kind \(args[0])")
             }
+        case "video":
+            // video on|off <app>: an app holding the display awake (playing video, or a keep-awake tool)
+            if try onOff(arg(0)) { video.holders.insert(try arg(1)) } else { video.holders.remove(try arg(1)) }
         case "lock": model.awayBegan(.locked)
         case "unlock": model.awayEnded(.locked)
         case "sleep": model.awayBegan(.asleep)
@@ -226,6 +230,7 @@ final class TestControl: ReminderSink {
             "suppression": m.suppressionReasons.map(\.label),
             "away": m.awayReasons.sorted().map(\.label),
             "humanIdle": input.secondsSinceHumanInput(now: clock.now),
+            "watching": m.watchingApps,
             "detection": [
                 "status": m.detectionStatusText,
                 "available": m.detectionError == nil,
