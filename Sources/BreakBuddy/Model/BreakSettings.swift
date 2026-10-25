@@ -8,6 +8,13 @@ enum BreakKind: String, Codable, CaseIterable, Comparable {
     static func < (a: BreakKind, b: BreakKind) -> Bool { a.rawValue < b.rawValue }
 }
 
+enum ReminderStyle: String, Codable {
+    /// A full-screen splash on every display: prompt, countdown, then a short "done" screen.
+    case fullScreen
+    /// Native notifications only.
+    case notification
+}
+
 struct BreakSettings: Codable, Equatable {
     var eyeIntervalMinutes: Double = 20
     var eyeDurationSeconds: Double = 20
@@ -15,6 +22,9 @@ struct BreakSettings: Codable, Equatable {
     var moveDurationSeconds: Double = 120
     var snoozeMinutes: Double = 5
     var graceSeconds: Double = 60
+    var reminderStyle: ReminderStyle = .fullScreen
+    /// After a meeting, the full-screen break waits for a click instead of starting by itself.
+    var catchUpRequiresClick = true
     var workingHoursEnabled = true
     /// Calendar weekdays (1 = Sunday … 7 = Saturday).
     var workDays: Set<Int> = [2, 3, 4, 5, 6]

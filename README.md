@@ -4,6 +4,11 @@ A meeting-aware break reminder for the macOS menu bar. Separate eye and movement
 breaks that come due during a meeting or presentation are held and offered as **one**
 catch-up break after the meeting ends and a short grace period passes.
 
+Breaks appear as a full-screen splash on every display (blurred desktop, countdown ring,
+Start / Snooze / Skip). The prompt starts the break by itself after 10 seconds — except after a
+meeting, when it waits for a click — then a "Nice break" screen confirms the timer restarted.
+Esc always gets you out. Settings → Breaks can switch to plain notifications instead.
+
 ## Install on another Mac
 
 Requires macOS 15 or later; the DMG is universal (Apple silicon and Intel).
@@ -67,7 +72,7 @@ Control commands: `advance <sec>`, `set-time <yyyy-MM-ddTHH:mm:ss>`, `presentati
 `signal <name> on|off`, `pause <min>|tomorrow`, `resume`, `lock`, `unlock`, `sleep`, `wake`,
 `displays-sleep`, `displays-wake`, `detect mic <bundleID> <name> on|off`, `detect mic-unattributed on|off`,
 `detect camera on|off`, `detect fail <message>`, `detect ok`, `input human|agent|present`,
-`render menubar <png>`, `render settings breaks|meetings|schedule|general <png> [dark]`, `take eye|move|both`, `end-break`,
+`prompt start|skip|dismiss|escape`, `render overlay <png> [secondary]`, `render menubar <png>`, `render settings breaks|meetings|schedule|general <png> [dark]`, `take eye|move|both`, `end-break`,
 `credit eye|move|both|due`, `snooze`, `settings '<json patch>'`, `state`, `quit`.
 
 ## Time-away and restart policy
@@ -146,6 +151,7 @@ writes `Resources/AppIcon.icns`, which `bundle.sh` copies into the app.
 | `System/SystemEvents.swift` | Sleep, display sleep, screen lock, user switching |
 | `Reminders/NotificationSink.swift` | Native notifications with Start / Snooze / Already took a break |
 | `Control/TestControl.swift` | Test mode and the `ctl` client |
+| `UI/BreakOverlay.swift` | Full-screen break windows and splash (prompt, countdown, done) |
 | `UI/MenuBarIcon.swift` | Fixed-width menu-bar label image (no jank as the countdown ticks) |
 | `UI/` | Menu and tabbed settings window |
 

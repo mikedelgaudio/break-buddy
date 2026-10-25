@@ -37,8 +37,16 @@ struct BreaksPane: View {
                 s.presets("Every", \.moveIntervalMinutes, [30, 45, 50, 60, 90], label: SettingsBindings.minutes)
                 s.presets("For", \.moveDurationSeconds, [60, 120, 180, 300], label: SettingsBindings.seconds)
             }
-            Section("When a reminder is ignored") {
-                s.presets("Remind again after", \.snoozeMinutes, [5, 10, 15, 30], label: SettingsBindings.minutes)
+            Section("Reminders") {
+                Picker("Show breaks as", selection: s.binding(\.reminderStyle)) {
+                    Text("Full screen").tag(ReminderStyle.fullScreen)
+                    Text("Notification").tag(ReminderStyle.notification)
+                }
+                .pickerStyle(.segmented)
+                if model.settings.reminderStyle == .fullScreen {
+                    Toggle("After meetings, wait for me to start the break", isOn: s.binding(\.catchUpRequiresClick))
+                }
+                s.presets("Snooze / remind again after", \.snoozeMinutes, [5, 10, 15, 30], label: SettingsBindings.minutes)
             }
             HStack {
                 Spacer()

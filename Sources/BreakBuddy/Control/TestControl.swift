@@ -45,6 +45,7 @@ final class TestControl: ReminderSink {
     let detector = FakeDetector()
     let input = FakeInputMonitor()
     let video = FakeVideoMonitor()
+    var overlay: BreakOverlayController?
     private var lastRenderSize: [CGFloat]?
 
     init(model: AppModel, config: TestConfig) {
@@ -149,6 +150,10 @@ final class TestControl: ReminderSink {
         case "render":
             // render menubar <path> · render settings <breaks|meetings|schedule|general> <path> [dark]
             switch try arg(0) {
+            case "overlay":
+                let view = BreakOverlayView(model: model, primary: args.count < 3 || args[2] != "secondary", renderBackdrop: true)
+                let size = Renderer.writeView(view.frame(width: 1440, height: 900), to: URL(filePath: try arg(1)), dark: true)
+                lastRenderSize = [size.width, size.height]
             case "menubar":
                 Renderer.writeMenuBar(MenuBarIcon.image(symbol: model.menuBarSymbol, text: model.menuBarText), to: URL(filePath: try arg(1)))
             case "settings":
@@ -176,6 +181,15 @@ final class TestControl: ReminderSink {
         case "video":
             // video on|off <app>: an app holding the display awake (playing video, or a keep-awake tool)
             if try onOff(arg(0)) { video.holders.insert(try arg(1)) } else { video.holders.remove(try arg(1)) }
+        case "prompt":
+            // prompt start|skip · prompt dismiss (the "done" screen) · prompt escape (Esc key)
+            switch try arg(0) {
+            case "start": model.startPromptedBreak()
+            case "skip": model.skipPrompt()
+            case "dismiss": model.dismissFinished()
+            case "escape": BreakOverlayView.escape(model)
+            default: throw CommandError(message: "unknown prompt action \(args[0])")
+            }
         case "lock": model.awayBegan(.locked)
         case "unlock": model.awayEnded(.locked)
         case "sleep": model.awayBegan(.asleep)
@@ -231,6 +245,8 @@ final class TestControl: ReminderSink {
             "away": m.awayReasons.sorted().map(\.label),
             "humanIdle": input.secondsSinceHumanInput(now: clock.now),
             "watching": m.watchingApps,
+            "overlay": overlayState(m),
+            "overlayWindows": overlay?.windowSummaries ?? [],
             "detection": [
                 "status": m.detectionStatusText,
                 "available": m.detectionError == nil,
@@ -252,6 +268,24 @@ final class TestControl: ReminderSink {
         let url = config.stateDir.appending(path: "state.json")
         if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private func overlayState(_ m: AppModel) -> Any {
+        switch m.overlayPhase {
+        case nil:
+            return NSNull()
+        case .prompt(let prompt):
+            return ["phase": "prompt", "kinds": prompt.kinds.sorted().map(\.rawValue), "catchUp": prompt.catchUp,
+                    "autoStartIn": prompt.autoStartAt.map { $0.timeIntervalSince(clock.now) } as Any? ?? NSNull(),
+                    "headline": OverlayCopy(phase: .prompt(prompt), settings: m.settings).headline]
+        case .breaking(let active):
+            return ["phase": "breaking", "kinds": active.kinds.sorted().map(\.rawValue),
+                    "secondsLeft": active.endsAt.timeIntervalSince(clock.now),
+                    "headline": OverlayCopy(phase: .breaking(active), settings: m.settings).headline]
+        case .finished(let kinds):
+            return ["phase": "finished", "kinds": kinds.sorted().map(\.rawValue),
+                    "headline": OverlayCopy(phase: .finished(kinds), settings: m.settings).headline]
         }
     }
 

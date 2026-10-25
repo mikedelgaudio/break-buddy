@@ -31,10 +31,14 @@ class CheckFailed(Exception):
 class App:
     """One test-mode app instance bound to a state directory."""
 
-    def __init__(self, state_dir: Path):
+    def __init__(self, state_dir: Path, overlay=False, windows=False):
         self.dir = state_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.env = {**os.environ, "BB_TEST_MODE": "1", "BB_STATE_DIR": str(self.dir)}
+        if windows:
+            self.env["BB_TEST_OVERLAY_WINDOWS"] = "1"
+        if not overlay:
+            (self.dir / "settings.json").write_text(json.dumps({"reminderStyle": "notification"}))
         self.proc = None
         self.transcript = self.dir / "transcript.jsonl"
 
@@ -113,9 +117,16 @@ class Checker:
 SCENARIOS = []
 
 
-def scenario(fn):
-    SCENARIOS.append(fn)
-    return fn
+def scenario(fn=None, *, overlay=False, windows=False):
+    """Registers a scenario. Most scenarios exercise reminder timing with the notification
+    style; `overlay=True` keeps the default full-screen style, `windows=True` also opens the
+    real overlay windows (briefly visible on screen)."""
+    def register(f):
+        f.overlay = overlay or windows
+        f.windows = windows
+        SCENARIOS.append(f)
+        return f
+    return register(fn) if fn else register
 
 
 @scenario
@@ -757,6 +768,125 @@ def keep_awake_tools_are_not_watching(app, check):
     check.eq(s["away"], ["No input from you"], "away as usual")
 
 
+# --- Full-screen break overlay (default reminder style) ------------------------
+
+
+@scenario(overlay=True)
+def eye_break_full_screen_flow(app, check):
+    """An eye break shows a full-screen prompt, starts by itself after 10s, counts down 20s, shows 'Nice break', then clears."""
+    s = app.ctl("advance", 1200)
+    o = s["overlay"]
+    check.eq((o["phase"], o["kinds"], o["headline"], o["autoStartIn"]), ("prompt", ["eye"], "Rest your eyes", 10), "prompt")
+    app.ctl("advance", 3)
+    app.ctl("render", "overlay", app.dir / "1-prompt.png")
+    check.eq(app.ctl("advance", 6)["overlay"]["phase"], "prompt", "still the prompt at 9s")
+    s = app.ctl("advance", 1)
+    check.eq((s["overlay"]["phase"], s["overlay"]["secondsLeft"]), ("breaking", 20), "break started by itself")
+    check.eq(len(app.events("promptAutoStarted")), 1, "auto-start recorded")
+    app.ctl("advance", 8)
+    app.ctl("render", "overlay", app.dir / "2-countdown.png")
+    app.ctl("render", "overlay", app.dir / "2-countdown-other-display.png", "secondary")
+    s = app.ctl("advance", 12)
+    check.eq((s["overlay"]["phase"], s["overlay"]["headline"]), ("finished", "Nice break"), "done screen")
+    check.eq(s["worked"]["eye"], 0, "eye timer restarted")
+    app.ctl("render", "overlay", app.dir / "3-done.png")
+    check.eq(app.ctl("advance", 4)["overlay"], None, "overlay gone after 4s")
+
+
+@scenario(overlay=True)
+def start_snooze_skip_from_prompt(app, check):
+    """Prompt buttons: Start begins at once; Snooze hides it for 5 min; Skip leaves the break due and it returns later."""
+    app.ctl("advance", 1200)
+    s = app.ctl("prompt", "start")
+    check.eq(s["overlay"]["phase"], "breaking", "Start begins the break at once")
+    app.ctl("end-break")
+    app.ctl("credit", "both")
+    app.ctl("advance", 1200)
+    s = app.ctl("snooze")
+    check.eq((s["overlay"], s["due"]), (None, ["eye"]), "Snooze hides the prompt, break still due")
+    check.eq(app.ctl("advance", 299)["overlay"], None, "hidden during snooze")
+    check.eq(app.ctl("advance", 1)["overlay"]["phase"], "prompt", "back after 5 min")
+    s = app.ctl("prompt", "skip")
+    check.eq((s["overlay"], s["due"]), (None, ["eye"]), "Skip hides it, break still due")
+    check.eq(len(app.events("promptSkipped")), 1, "skip recorded")
+    check.eq(app.ctl("advance", 300)["overlay"]["phase"], "prompt", "offered again after the repeat interval")
+
+
+@scenario(overlay=True)
+def escape_key(app, check):
+    """Esc skips the prompt, and during a countdown ends the break early without credit."""
+    app.ctl("advance", 1200)
+    check.eq(app.ctl("prompt", "escape")["overlay"], None, "Esc skips the prompt")
+    app.ctl("take", "move")
+    app.ctl("advance", 30)
+    s = app.ctl("prompt", "escape")
+    check.eq(s["overlay"], None, "Esc ends the countdown")
+    check.eq(s["worked"]["move"], 1200, "no credit for an unfinished break")
+
+
+@scenario(overlay=True)
+def catch_up_waits_for_a_click(app, check):
+    """After a meeting the full-screen catch-up waits for a click instead of starting by itself."""
+    app.ctl("presentation", "on")
+    app.ctl("advance", 3100)
+    app.ctl("presentation", "off")
+    s = app.ctl("advance", 60)
+    o = s["overlay"]
+    check.eq((o["phase"], o["catchUp"], o["headline"], o["autoStartIn"]), ("prompt", True, "Your meeting is over", None), "catch-up prompt")
+    app.ctl("render", "overlay", app.dir / "catch-up.png")
+    check.eq(app.ctl("advance", 120)["overlay"]["phase"], "prompt", "still waiting 2 min later")
+    s = app.ctl("prompt", "start")
+    check.eq((s["overlay"]["phase"], s["overlay"]["kinds"], s["overlay"]["secondsLeft"]), ("breaking", ["eye", "move"], 120), "combined 2-minute break")
+
+
+@scenario(overlay=True)
+def call_starting_withdraws_the_prompt(app, check):
+    """If a call starts while the prompt is up, it disappears and comes back after the call."""
+    s = app.ctl("advance", 1200)
+    check.eq(s["overlay"]["phase"], "prompt", "prompt shown")
+    app.ctl("detect", "mic", "com.microsoft.teams2", "Microsoft Teams", "on")
+    s = app.ctl("advance", 8)
+    check.eq(s["overlay"], None, "withdrawn when the call is detected")
+    check.eq(len(app.events("promptWithdrawn")), 1, "withdrawal recorded")
+    app.ctl("advance", 600)
+    app.ctl("detect", "mic", "com.microsoft.teams2", "Microsoft Teams", "off")
+    s = app.ctl("advance", 75)
+    check.eq((s["overlay"]["phase"], s["overlay"]["catchUp"]), ("prompt", True), "back as a catch-up after the call")
+
+
+@scenario(overlay=True)
+def take_break_from_menu_shows_countdown(app, check):
+    """'Take break now' from the menu goes straight to the full-screen countdown."""
+    s = app.ctl("take", "move")
+    check.eq((s["overlay"]["phase"], s["overlay"]["headline"], s["overlay"]["secondsLeft"]), ("breaking", "Stand up and move", 120), "countdown")
+    app.ctl("advance", 45)
+    app.ctl("render", "overlay", app.dir / "movement-countdown.png")
+
+
+@scenario(overlay=True)
+def notification_style_has_no_overlay(app, check):
+    """Choosing Notification in Settings turns the full-screen overlay off."""
+    app.ctl("settings", json.dumps({"reminderStyle": "notification"}))
+    s = app.ctl("advance", 1200)
+    check.eq((s["overlay"], s["remindersDelivered"]), (None, 1), "reminder delivered without overlay")
+
+
+@scenario(windows=True)
+def overlay_windows_cover_every_display(app, check):
+    """Real overlay windows: one per display, each visible, covering its screen, above full-screen apps, on all Spaces; exactly one shows the main card."""
+    app.ctl("advance", 1200)
+    s = app.ctl("state")  # windows open on the next run-loop turn after the phase changes
+    windows = s["overlayWindows"]
+    check(len(windows) >= 1, "at least one window", len(windows))
+    check(all(w["visible"] and w["coversScreen"] for w in windows), "visible and covering each screen", windows)
+    check(all(w["aboveFullScreenApps"] and w["allSpaces"] for w in windows), "above full-screen apps, on all Spaces", windows)
+    check.eq(sum(w["primary"] for w in windows), 1, "one main card")
+    app.ctl("prompt", "start")
+    app.ctl("advance", 20)
+    app.ctl("advance", 4)
+    check.eq(app.ctl("state")["overlayWindows"], [], "windows closed when the overlay clears")
+
+
 # --- Visual: menu bar stability, settings layout, app icon ------------------
 
 
@@ -828,7 +958,7 @@ def main():
 
     results = []
     for fn in selected:
-        app = App(run_dir / fn.__name__)
+        app = App(run_dir / fn.__name__, overlay=fn.overlay, windows=fn.windows)
         check = Checker()
         started = time.time()
         error = None

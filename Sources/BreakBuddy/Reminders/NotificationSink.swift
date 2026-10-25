@@ -25,6 +25,7 @@ final class NotificationSink: NSObject, ReminderSink, UNUserNotificationCenterDe
     }
 
     func remind(_ kinds: Set<BreakKind>, catchUp: Bool) {
+        guard !model.usesOverlay else { return }
         let content = UNMutableNotificationContent()
         switch (catchUp, kinds) {
         case (true, _):
@@ -48,6 +49,7 @@ final class NotificationSink: NSObject, ReminderSink, UNUserNotificationCenterDe
     }
 
     func breakFinished(_ kinds: Set<BreakKind>) {
+        guard !model.usesOverlay else { return }
         let content = UNMutableNotificationContent()
         content.title = "Break complete"
         content.body = "Timers restarted for \(kinds.sorted().map { $0.label.lowercased() }.joined(separator: " and "))."

@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sink: ReminderSink?
     private var control: TestControl?
     private var systemEvents: SystemEvents?
+    private(set) var overlay: BreakOverlayController?
     private var activity: NSObjectProtocol?
 
     override init() {
@@ -76,9 +77,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.restoreSavedState()
         if let control {
+            // Real overlay windows only when a scenario asks for them, so local E2E runs
+            // don't flash full-screen windows over your work.
+            if ProcessInfo.processInfo.environment["BB_TEST_OVERLAY_WINDOWS"] == "1" {
+                overlay = BreakOverlayController(model: model)
+                control.overlay = overlay
+            }
             control.start()
         } else {
             systemEvents = SystemEvents(model: model)
+            overlay = BreakOverlayController(model: model)
             // Menu-bar apps get App Nap'd; keep the 1s tick honest without blocking sleep.
             activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Break timers")
             model.startRealTimeTicking()

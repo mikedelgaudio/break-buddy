@@ -6,6 +6,21 @@ struct ActiveBreak: Equatable {
     var endsAt: Date
 }
 
+/// A full-screen reminder waiting for the person: starts by itself at `autoStartAt` unless
+/// that's nil (catch-up after a meeting, when a click is required).
+struct BreakPrompt: Equatable {
+    var kinds: Set<BreakKind>
+    var catchUp: Bool
+    var autoStartAt: Date?
+}
+
+/// What the full-screen overlay shows, if anything.
+enum OverlayPhase: Equatable {
+    case prompt(BreakPrompt)
+    case breaking(ActiveBreak)
+    case finished(Set<BreakKind>)
+}
+
 /// Reasons the user is known to be away from the screen. Work time stops while any is active.
 enum AwayReason: String, CaseIterable, Comparable {
     case locked, asleep, displaysAsleep, switchedOut, idle
@@ -39,6 +54,10 @@ final class AppModel {
     static let persistInterval: TimeInterval = 15
     /// After this long not running (or on a new day) a relaunch starts with fresh timers.
     static let restartResetAfter: TimeInterval = 30 * 60
+    /// A full-screen prompt starts the break by itself after this long.
+    static let promptAutoStart: TimeInterval = 10
+    /// How long the "break complete" screen stays up.
+    static let finishedDisplay: TimeInterval = 4
     /// Detection: poll cadence, how long evidence must persist to count (filters blips), how
     /// long it may vanish before a call is considered over (rides out mute/unmute), and how
     /// long evidence is held while detection is failing.
@@ -58,6 +77,8 @@ final class AppModel {
     private(set) var simulatedSignals: Set<String> = []
     private(set) var pausedUntil: Date?
     private(set) var activeBreak: ActiveBreak?
+    private(set) var prompt: BreakPrompt?
+    private(set) var finishedBreak: (kinds: Set<BreakKind>, dismissAt: Date)?
     private(set) var awayReasons: Set<AwayReason> = []
     private(set) var remindersDelivered = 0
     /// Debounced detector evidence currently deferring reminders.
@@ -147,6 +168,11 @@ final class AppModel {
             setPresentationMode(false)
         }
         if current.timeIntervalSince(lastPersist) >= Self.persistInterval { persist() }
+        if let prompt, let start = prompt.autoStartAt, current >= start {
+            emit("promptAutoStarted", [:])
+            startBreak(prompt.kinds)
+        }
+        if let finished = finishedBreak, current >= finished.dismissAt { finishedBreak = nil }
         if let active = activeBreak {
             if current >= active.endsAt { finishBreak(active) }
             return
@@ -162,6 +188,11 @@ final class AppModel {
         if let kinds = coordinator.evaluate(now: current, due: due, suppressed: suppressed, settings: settings) {
             remindersDelivered += 1
             emit("reminder", ["kinds": kinds.sorted().map(\.rawValue), "catchUp": deferredWhileDue])
+            if usesOverlay {
+                let waitForClick = deferredWhileDue && settings.catchUpRequiresClick
+                prompt = BreakPrompt(kinds: kinds, catchUp: deferredWhileDue,
+                                     autoStartAt: waitForClick ? nil : current.addingTimeInterval(Self.promptAutoStart))
+            }
             sink?.remind(kinds, catchUp: deferredWhileDue)
             deferredWhileDue = false
         }
@@ -278,8 +309,37 @@ final class AppModel {
 
     // MARK: Actions
 
+    var usesOverlay: Bool { settings.reminderStyle == .fullScreen }
+
+    var overlayPhase: OverlayPhase? {
+        guard usesOverlay else { return nil }
+        if let activeBreak { return .breaking(activeBreak) }
+        if let prompt { return .prompt(prompt) }
+        if let finishedBreak { return .finished(finishedBreak.kinds) }
+        return nil
+    }
+
+    /// "Start break" on the full-screen prompt.
+    func startPromptedBreak() {
+        guard let prompt else { return }
+        startBreak(prompt.kinds)
+    }
+
+    /// "Skip" on the prompt: the break stays due and is offered again after the snooze interval.
+    func skipPrompt() {
+        guard prompt != nil else { return }
+        prompt = nil
+        emit("promptSkipped", [:])
+    }
+
+    func dismissFinished() {
+        finishedBreak = nil
+    }
+
     func startBreak(_ kinds: Set<BreakKind>) {
         guard !kinds.isEmpty, activeBreak == nil else { return }
+        prompt = nil
+        finishedBreak = nil
         let length = kinds.map(settings.duration).max() ?? 0
         activeBreak = ActiveBreak(kinds: kinds, endsAt: now.addingTimeInterval(length))
         sink?.clearReminders()
@@ -301,6 +361,7 @@ final class AppModel {
         activeBreak = nil
         scheduler.reset(active.kinds)
         coordinator.credit(active.kinds)
+        if usesOverlay { finishedBreak = (active.kinds, now.addingTimeInterval(Self.finishedDisplay)) }
         emit("breakCompleted", ["kinds": active.kinds.sorted().map(\.rawValue)])
         sink?.breakFinished(active.kinds)
     }
@@ -310,6 +371,7 @@ final class AppModel {
         guard !kinds.isEmpty else { return }
         scheduler.reset(kinds)
         coordinator.credit(kinds)
+        prompt = nil
         sink?.clearReminders()
         emit("credited", ["kinds": kinds.sorted().map(\.rawValue)])
     }
@@ -318,6 +380,7 @@ final class AppModel {
 
     func snooze() {
         coordinator.snooze(now: now, settings: settings)
+        prompt = nil
         sink?.clearReminders()
         emit("snoozed", ["minutes": settings.snoozeMinutes])
     }
@@ -331,6 +394,7 @@ final class AppModel {
 
     private func pause(until date: Date) {
         pausedUntil = date
+        prompt = nil
         sink?.clearReminders()
         emit("paused", ["until": date.timeIntervalSince1970])
     }
@@ -357,6 +421,11 @@ final class AppModel {
 
     private func suppressionChanged() {
         coordinator.updateSuppression(isSuppressed, now: now, settings: settings)
+        // A call starting (or stepping away) takes the prompt down; it's re-offered afterwards.
+        if isSuppressed, prompt != nil {
+            prompt = nil
+            emit("promptWithdrawn", [:])
+        }
     }
 
     func updateSettings(_ change: (inout BreakSettings) -> Void) {
