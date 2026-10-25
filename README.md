@@ -9,31 +9,29 @@ Start / Snooze / Skip). The prompt starts the break by itself after 10 seconds �
 meeting, when it waits for a click — then a "Nice break" screen confirms the timer restarted.
 Esc always gets you out. Settings → Breaks can switch to plain notifications instead.
 
-## Install on another Mac
-
-Requires macOS 15 or later; the DMG is universal (Apple silicon and Intel).
-
-**Easiest: download with `gh`** (no Gatekeeper prompt, because command-line downloads aren't quarantined):
+## Install
 
 ```bash
-gh release download --repo mikedelgaudio/break-buddy --pattern '*.dmg' --dir ~/Downloads
+brew install --cask mikedelgaudio/tap/break-buddy
 ```
 
-Open the DMG and drag **Break Buddy** onto **Applications**.
+Or download the DMG from [Releases](https://github.com/mikedelgaudio/break-buddy/releases/latest)
+and drag **Break Buddy** to **Applications**. Requires macOS 15 or later (Apple silicon or Intel).
 
-**From the browser:** signed in to GitHub, open the repo → Releases → download the DMG, then drag
-to Applications. The app isn't notarized, so the first launch is blocked: open **System Settings →
-Privacy & Security**, scroll to *"Break Buddy" was blocked*, click **Open Anyway**. (Or run
-`xattr -dr com.apple.quarantine "/Applications/Break Buddy.app"`.)
+The app isn't notarized yet, so macOS blocks the first launch once: open **System Settings →
+Privacy & Security** and click **Open Anyway**.
 
-On a managed work Mac, unsigned apps may be blocked by policy — check before working around it.
+Update with `brew upgrade`; uninstall with `brew uninstall --cask break-buddy` (add `--zap` to
+also remove settings and saved timers).
 
 ### Making a release
 
 Automatic: every push to `main` that touches the app (not just `*.md`, `docs/` or `design/`)
 releases a **minor** bump via GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)).
 It runs the full E2E suite on a macOS runner and, only if every scenario passes, builds the
-universal DMG, tags the commit and publishes the release. The E2E report is attached to each run.
+universal DMG, tags the commit, publishes the release and bumps the cask in
+[mikedelgaudio/homebrew-tap](https://github.com/mikedelgaudio/homebrew-tap). The E2E report is
+attached to each run.
 
 Manual runs pick their own bump:
 
